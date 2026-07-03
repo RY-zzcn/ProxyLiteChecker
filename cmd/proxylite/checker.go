@@ -79,8 +79,8 @@ var targetProfiles = map[string]TargetProfile{
 }
 
 func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
-	if s.jobs.TypeRunning("check") {
-		return nil, jobConflict("check")
+	if running := s.jobs.RunningOfTypes("fetch", "check"); running != nil {
+		return nil, runningJobConflict(running)
 	}
 	cfg := CheckConfig{
 		TargetProfile:  normalizeTargetProfile(optionalString(payload["target_profile"], "generic")),

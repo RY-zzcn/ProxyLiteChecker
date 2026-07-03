@@ -64,6 +64,21 @@ func (m *jobManager) TypeRunning(jobType string) bool {
 	return false
 }
 
+func (m *jobManager) RunningOfTypes(jobTypes ...string) *jobState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	allowed := map[string]bool{}
+	for _, jobType := range jobTypes {
+		allowed[jobType] = true
+	}
+	for _, job := range m.items {
+		if job.Status == "running" && (len(allowed) == 0 || allowed[job.Type]) {
+			return cloneJob(job)
+		}
+	}
+	return nil
+}
+
 func (m *jobManager) Update(id string, patch map[string]any) (*jobState, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -190,4 +205,22 @@ func (m *jobManager) complete(id string, message string, result map[string]any) 
 
 func jobConflict(jobType string) error {
 	return fmt.Errorf("%s job is already running", jobType)
+}
+
+func runningJobConflict(job *jobState) error {
+	if job == nil {
+		return nil
+	}
+	return fmt.Errorf("已有%s任务运行中，请等待完成或先停止当前任务", jobTypeLabel(job.Type))
+}
+
+func jobTypeLabel(jobType string) string {
+	switch jobType {
+	case "fetch":
+		return "拉取"
+	case "check":
+		return "检测"
+	default:
+		return jobType
+	}
 }

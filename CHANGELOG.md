@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6 - 2026-07-03
+
+- Add persisted runtime settings for proxy list page size, source fetch limits, check scope, target profile, batch size, concurrency, rounds, and timeouts.
+- Add automatic source fetch and automatic proxy check scheduling with conflict handling against manual long-running tasks.
+- Redesign the proxy repository area as a fixed-height paginated table so large imports no longer stretch the page.
+- Add a compact web settings panel for auto tasks and detection parameters.
+
 ## 0.1.5 - 2026-07-03
 
 - Add GHCR Docker image publishing for `main` and `v*` tags.

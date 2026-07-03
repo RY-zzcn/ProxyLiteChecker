@@ -120,7 +120,7 @@ textarea:focus {
 
 textarea {
   width: 100%;
-  min-height: 256px;
+  min-height: 214px;
   resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
@@ -332,7 +332,7 @@ textarea {
 
 .content-grid {
   display: grid;
-  grid-template-columns: minmax(420px, 0.95fr) minmax(420px, 1.05fr);
+  grid-template-columns: minmax(360px, 0.95fr) minmax(360px, 0.95fr) minmax(420px, 1.1fr);
   gap: 16px;
   margin-bottom: 16px;
 }
@@ -445,7 +445,7 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  max-height: 300px;
+  max-height: 236px;
   overflow: auto;
   padding-right: 2px;
 }
@@ -505,23 +505,79 @@ textarea {
   width: 190px;
 }
 
+.settings-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.switch-row input {
+  width: 18px;
+  min-height: 18px;
+  order: 2;
+}
+
+.mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.mini-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mini-grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mini-grid label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mini-grid input,
+.mini-grid select {
+  width: 100%;
+  min-width: 0;
+}
+
 .table-wrap {
   width: 100%;
-  overflow-x: auto;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.proxy-table-viewport {
+  max-height: 462px;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 940px;
+  min-width: 0;
+  table-layout: fixed;
 }
 
 th,
 td {
   text-align: left;
-  padding: 10px 9px;
+  padding: 8px 8px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
   font-size: 13px;
@@ -541,12 +597,54 @@ th {
 }
 
 td {
-  height: 44px;
+  height: 38px;
 }
 
 .proxy-cell {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+th:nth-child(1),
+td:nth-child(1) {
+  width: 25%;
+}
+
+th:nth-child(2),
+td:nth-child(2) {
+  width: 8%;
+}
+
+th:nth-child(3),
+td:nth-child(3),
+th:nth-child(4),
+td:nth-child(4) {
+  width: 7%;
+}
+
+th:nth-child(5),
+td:nth-child(5) {
+  width: 15%;
+}
+
+th:nth-child(6),
+td:nth-child(6) {
+  width: 12%;
+}
+
+th:nth-child(7),
+td:nth-child(7) {
+  width: 12%;
+}
+
+th:nth-child(8),
+td:nth-child(8) {
+  width: 14%;
+}
+
+td:not(.proxy-cell) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -614,6 +712,21 @@ td {
   text-align: center;
   color: var(--muted);
   height: 88px;
+}
+
+.proxy-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pager {
+  display: flex;
+  gap: 8px;
 }
 
 .toast-host {
@@ -709,7 +822,10 @@ td {
   .metric-grid,
   .gateway-strip,
   .action-grid,
-  .source-list {
+  .source-list,
+  .mini-grid,
+  .mini-grid.three,
+  .mini-grid.four {
     grid-template-columns: 1fr;
   }
 
@@ -726,5 +842,14 @@ td {
 
   .compact-label input {
     width: 100%;
+  }
+
+  table {
+    min-width: 920px;
+  }
+
+  .proxy-footer {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

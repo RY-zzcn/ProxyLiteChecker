@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	appVersion           = "0.1.5"
+	appVersion           = "0.1.6"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -48,11 +48,12 @@ type config struct {
 }
 
 type server struct {
-	cfg     config
-	mux     *http.ServeMux
-	store   *store
-	jobs    *jobManager
-	gateway *gatewayServer
+	cfg       config
+	mux       *http.ServeMux
+	store     *store
+	jobs      *jobManager
+	gateway   *gatewayServer
+	scheduler *scheduler
 }
 
 type loginRequest struct {
@@ -145,13 +146,18 @@ func newServer(cfg config) *server {
 	if err := st.EnsureSchema(cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		log.Fatalf("ensure schema failed: %v", err)
 	}
+	if err := st.EnsureSettingsSchema(); err != nil {
+		log.Fatalf("ensure settings schema failed: %v", err)
+	}
 	srv := &server{
 		cfg:   cfg,
 		mux:   http.NewServeMux(),
 		store: st,
 		jobs:  newJobManager(),
 	}
+	srv.scheduler = newScheduler(srv)
 	srv.routes()
+	srv.scheduler.Start()
 	return srv
 }
 
@@ -159,6 +165,8 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("GET /api/bootstrap", s.withAuth(s.handleBootstrap))
+	s.mux.HandleFunc("GET /api/settings", s.withAuth(s.handleGetSettings))
+	s.mux.HandleFunc("POST /api/settings", s.withAuth(s.handleSaveSettings))
 	s.mux.HandleFunc("GET /api/stats", s.withAuth(s.handleStats))
 	s.mux.HandleFunc("GET /api/sources", s.withAuth(s.handleSources))
 	s.mux.HandleFunc("POST /api/sources/fetch-job", s.withAuth(s.handleFetchSourcesJob))
@@ -244,14 +252,21 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	settings, err := s.store.AppSettings()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"app": map[string]any{
 			"name":    s.cfg.AppName,
 			"version": s.cfg.AppVersion,
 		},
-		"stats":   stats,
-		"sources": builtinSources(),
-		"gateway": s.gatewayPayload(),
+		"stats":     stats,
+		"sources":   builtinSources(),
+		"settings":  settings,
+		"scheduler": s.scheduler.Status(settings),
+		"gateway":   s.gatewayPayload(),
 		"exports": map[string]any{
 			"txt":  "/api/export/proxies.txt",
 			"json": "/api/export/proxies.json",
@@ -260,6 +275,41 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]any{
 			"username": s.usernameFromRequest(r),
 		},
+	})
+}
+
+func (s *server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
+	settings, err := s.store.AppSettings()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"settings":  settings,
+		"scheduler": s.scheduler.Status(settings),
+	})
+}
+
+func (s *server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]any
+	if err := readJSON(r, &payload); err != nil {
+		errorResponse(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	current, err := s.store.AppSettings()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	settings, err := s.store.SaveAppSettings(settingsFromPayload(current, payload))
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.scheduler.Reset(settings)
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"settings":  settings,
+		"scheduler": s.scheduler.Status(settings),
 	})
 }
 

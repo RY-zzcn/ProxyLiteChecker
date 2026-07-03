@@ -1,9 +1,16 @@
 const state = {
   token: localStorage.getItem("plc_token") || "",
   sources: [],
+  settings: null,
+  scheduler: null,
   activeJob: null,
   pollTimer: null,
   sourceSelected: 0,
+  proxies: {
+    offset: 0,
+    limit: 50,
+    total: 0,
+  },
 };
 
 const el = (id) => document.getElementById(id);
@@ -56,6 +63,25 @@ function escapeHtml(value) {
 function statusTag(status) {
   const text = { available: "可用", failed: "失败", untested: "待检", checking: "检测中" }[status] || status;
   return `<span class="tag ${escapeHtml(status)}">${escapeHtml(text)}</span>`;
+}
+
+function defaultSettings() {
+  return {
+    proxy_page_size: 50,
+    fetch_limit_per_source: 0,
+    check_status: "untested",
+    check_target_profile: "generic",
+    check_limit: 500,
+    check_concurrent: 50,
+    check_rounds: 1,
+    check_request_timeout: 6,
+    check_hard_timeout: 60,
+    auto_fetch_enabled: false,
+    auto_fetch_interval_minutes: 360,
+    auto_fetch_source_ids: [],
+    auto_check_enabled: false,
+    auto_check_interval_minutes: 120,
+  };
 }
 
 function proxyUrl(item) {
@@ -123,7 +149,11 @@ async function bootstrap() {
   showApp();
   el("versionText").textContent = `v${payload.app.version}`;
   state.sources = payload.sources || [];
+  state.settings = { ...defaultSettings(), ...(payload.settings || {}) };
+  state.scheduler = payload.scheduler || null;
+  state.proxies.limit = Number(state.settings.proxy_page_size || 50);
   renderStats(payload.stats || {});
+  renderSettings(state.settings, state.scheduler);
   renderSources();
   renderGateway(payload.gateway || {});
   renderJobs(payload.active_jobs || []);
@@ -138,12 +168,14 @@ function renderStats(stats) {
 }
 
 function renderSources() {
+  const selectedIDs = new Set((state.settings?.auto_fetch_source_ids || []).map(String));
+  const useAll = selectedIDs.size === 0;
   el("sourceCountText").textContent = `${state.sources.length} 个代理源`;
   el("sourcesList").innerHTML = state.sources
     .map(
       (source) => `
         <label class="source-item" title="${escapeHtml(source.url)}">
-          <input type="checkbox" class="source-check" value="${escapeHtml(source.id)}" checked />
+          <input type="checkbox" class="source-check" value="${escapeHtml(source.id)}" ${useAll || selectedIDs.has(source.id) ? "checked" : ""} />
           <span>${escapeHtml(source.name)}</span>
         </label>
       `,
@@ -153,6 +185,44 @@ function renderSources() {
     input.addEventListener("change", updateSelectedSources);
   });
   updateSelectedSources();
+}
+
+function renderSettings(settings, scheduler) {
+  state.settings = { ...defaultSettings(), ...(settings || {}) };
+  state.scheduler = scheduler || state.scheduler;
+  el("autoFetchEnabled").checked = Boolean(state.settings.auto_fetch_enabled);
+  el("autoFetchInterval").value = state.settings.auto_fetch_interval_minutes;
+  el("sourceLimit").value = state.settings.fetch_limit_per_source;
+  el("settingsFetchLimit").value = state.settings.fetch_limit_per_source;
+  el("autoCheckEnabled").checked = Boolean(state.settings.auto_check_enabled);
+  el("autoCheckInterval").value = state.settings.auto_check_interval_minutes;
+  el("proxyPageSize").value = String(state.settings.proxy_page_size);
+  el("settingsCheckStatus").value = state.settings.check_status;
+  el("settingsCheckTarget").value = state.settings.check_target_profile;
+  el("settingsCheckLimit").value = state.settings.check_limit;
+  el("settingsCheckConcurrent").value = state.settings.check_concurrent;
+  el("settingsCheckRounds").value = state.settings.check_rounds;
+  el("settingsCheckTimeout").value = state.settings.check_request_timeout;
+  el("settingsCheckHardTimeout").value = state.settings.check_hard_timeout;
+  renderSchedulerText(state.scheduler);
+}
+
+function renderSchedulerText(scheduler) {
+  const parts = [];
+  if (scheduler?.fetch?.enabled) {
+    parts.push(`拉取 ${displayNextRun(scheduler.fetch.next_run_at)}`);
+  }
+  if (scheduler?.check?.enabled) {
+    parts.push(`检测 ${displayNextRun(scheduler.check.next_run_at)}`);
+  }
+  el("schedulerText").textContent = parts.length ? parts.join(" · ") : scheduler?.message || "自动任务未启用";
+}
+
+function displayNextRun(value) {
+  if (!value) return "等待排程";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "等待排程";
+  return `下次 ${date.toLocaleString()}`;
 }
 
 function updateSelectedSources() {
@@ -223,16 +293,25 @@ async function loadActiveJobs() {
   renderJobs(payload.items || []);
 }
 
+async function loadSettings() {
+  const payload = await api("/api/settings");
+  renderSettings(payload.settings, payload.scheduler);
+}
+
 async function loadProxies() {
   const params = new URLSearchParams({
     status: el("proxyStatus").value,
     target_profile: el("targetProfile").value,
     q: el("proxySearch").value.trim(),
-    limit: "200",
+    limit: String(state.proxies.limit),
+    offset: String(state.proxies.offset),
   });
   const payload = await api(`/api/proxies?${params}`);
   const rows = payload.items || [];
-  el("proxyTableSummary").textContent = `${payload.total || rows.length} 条记录`;
+  state.proxies.total = payload.total || rows.length;
+  state.proxies.limit = payload.limit || state.proxies.limit;
+  state.proxies.offset = payload.offset || 0;
+  el("proxyTableSummary").textContent = `${state.proxies.total} 条记录`;
   el("proxyRows").innerHTML =
     rows
       .map(
@@ -250,6 +329,25 @@ async function loadProxies() {
         `,
       )
       .join("") || `<tr><td colspan="8" class="empty-row">暂无代理</td></tr>`;
+  renderProxyPager(rows.length);
+}
+
+function renderProxyPager(rowCount) {
+  const total = state.proxies.total;
+  const limit = state.proxies.limit;
+  const offset = state.proxies.offset;
+  const page = total === 0 ? 1 : Math.floor(offset / limit) + 1;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const start = total === 0 ? 0 : offset + 1;
+  const end = Math.min(offset + rowCount, total);
+  el("proxyPageText").textContent = `${start}-${end} / ${total} · 第 ${page}/${pages} 页`;
+  el("prevProxyPage").disabled = offset <= 0;
+  el("nextProxyPage").disabled = offset + limit >= total;
+}
+
+function resetProxyPage() {
+  state.proxies.offset = 0;
+  return loadProxies();
 }
 
 async function fetchSources(event) {
@@ -288,15 +386,19 @@ async function importProxies(event) {
 }
 
 async function runCheck(event) {
+  const checkTimeout = Number(el("settingsCheckTimeout").value || state.settings?.check_request_timeout || 6);
+  const hardTimeout = Number(el("settingsCheckHardTimeout").value || state.settings?.check_hard_timeout || checkTimeout * 10);
   await withButton(event.currentTarget, "检测中", async () => {
     const payload = await api("/api/checks/run-job", {
       method: "POST",
       body: JSON.stringify({
-        status: el("proxyStatus").value === "all" ? "untested" : el("proxyStatus").value,
-        target_profile: el("targetProfile").value,
-        limit: 500,
-        concurrent: 30,
-        rounds: 1,
+        status: el("settingsCheckStatus").value,
+        target_profile: el("settingsCheckTarget").value,
+        limit: Number(el("settingsCheckLimit").value || 500),
+        concurrent: Number(el("settingsCheckConcurrent").value || 50),
+        rounds: Number(el("settingsCheckRounds").value || 1),
+        request_timeout: checkTimeout,
+        hard_timeout: Math.max(checkTimeout, hardTimeout),
       }),
     });
     toast(`检测任务已开始：${payload.count || 0} 条`, "success");
@@ -317,6 +419,7 @@ function startPolling() {
       await loadActiveJobs();
       await loadStats();
       await loadGateway();
+      await loadSettings();
       if (!state.activeJob) {
         await loadProxies();
         clearInterval(state.pollTimer);
@@ -327,6 +430,39 @@ function startPolling() {
       toast(error.message, "error");
     }
   }, 1200);
+}
+
+async function saveSettings(event) {
+  const selectedSourceIDs = [...document.querySelectorAll(".source-check:checked")].map((input) => input.value);
+  const allSourcesSelected = selectedSourceIDs.length === state.sources.length;
+  const checkTimeout = Number(el("settingsCheckTimeout").value || 6);
+  const hardTimeout = Number(el("settingsCheckHardTimeout").value || checkTimeout * 10);
+  await withButton(event.currentTarget, "保存中", async () => {
+    const payload = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        proxy_page_size: Number(el("proxyPageSize").value || 50),
+        fetch_limit_per_source: Number(el("settingsFetchLimit").value || 0),
+        check_status: el("settingsCheckStatus").value,
+        check_target_profile: el("settingsCheckTarget").value,
+        check_limit: Number(el("settingsCheckLimit").value || 500),
+        check_concurrent: Number(el("settingsCheckConcurrent").value || 50),
+        check_rounds: Number(el("settingsCheckRounds").value || 1),
+        check_request_timeout: checkTimeout,
+        check_hard_timeout: Math.max(checkTimeout, hardTimeout),
+        auto_fetch_enabled: el("autoFetchEnabled").checked,
+        auto_fetch_interval_minutes: Number(el("autoFetchInterval").value || 360),
+        auto_fetch_source_ids: allSourcesSelected ? [] : selectedSourceIDs,
+        auto_check_enabled: el("autoCheckEnabled").checked,
+        auto_check_interval_minutes: Number(el("autoCheckInterval").value || 120),
+      }),
+    });
+    renderSettings(payload.settings, payload.scheduler);
+    state.proxies.limit = Number(payload.settings.proxy_page_size || 50);
+    state.proxies.offset = 0;
+    toast("设置已保存", "success");
+    await loadProxies();
+  });
 }
 
 async function cancelJob(event) {
@@ -351,6 +487,7 @@ async function refreshAll() {
   await loadStats();
   await loadGateway();
   await loadActiveJobs();
+  await loadSettings();
   await loadProxies();
 }
 
@@ -379,9 +516,28 @@ function bindEvents() {
   el("runCheckBtn").addEventListener("click", runCheck);
   el("deleteFailedBtn").addEventListener("click", deleteFailed);
   el("cancelJobBtn").addEventListener("click", cancelJob);
-  el("proxyStatus").addEventListener("change", loadProxies);
-  el("targetProfile").addEventListener("change", loadProxies);
-  el("proxySearch").addEventListener("input", debounce(loadProxies, 250));
+  el("saveSettingsBtn").addEventListener("click", saveSettings);
+  el("settingsFetchLimit").addEventListener("input", () => {
+    el("sourceLimit").value = el("settingsFetchLimit").value;
+  });
+  el("sourceLimit").addEventListener("input", () => {
+    el("settingsFetchLimit").value = el("sourceLimit").value;
+  });
+  el("proxyPageSize").addEventListener("change", () => {
+    state.proxies.limit = Number(el("proxyPageSize").value || 50);
+    resetProxyPage();
+  });
+  el("prevProxyPage").addEventListener("click", () => {
+    state.proxies.offset = Math.max(0, state.proxies.offset - state.proxies.limit);
+    loadProxies();
+  });
+  el("nextProxyPage").addEventListener("click", () => {
+    state.proxies.offset += state.proxies.limit;
+    loadProxies();
+  });
+  el("proxyStatus").addEventListener("change", resetProxyPage);
+  el("targetProfile").addEventListener("change", resetProxyPage);
+  el("proxySearch").addEventListener("input", debounce(resetProxyPage, 250));
 }
 
 function debounce(fn, wait) {
