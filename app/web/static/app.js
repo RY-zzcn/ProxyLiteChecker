@@ -72,6 +72,27 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through to the textarea copy path for non-secure public HTTP access.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
 function statusTag(status) {
   const text = { available: "可用", failed: "失败", untested: "待检", checking: "检测中" }[status] || status;
   return `<span class="tag ${escapeHtml(status)}">${escapeHtml(text)}</span>`;
@@ -341,13 +362,19 @@ function gatewayCardHTML(item, gatewayEnabled) {
         <span>${Number(item.upstreams || 0)} 上游</span>
       </div>
       <div class="endpoint-pair">
-        <div>
+        <div class="endpoint-row">
           <span>HTTP</span>
-          <code>${escapeHtml(httpBind)}</code>
+          <div class="endpoint-copy-row">
+            <code>${escapeHtml(httpBind)}</code>
+            <button type="button" class="copy-button" data-copy-gateway="${httpBind === "未启用" ? "" : escapeHtml(httpBind)}" ${httpBind === "未启用" ? "disabled" : ""}>复制</button>
+          </div>
         </div>
-        <div>
+        <div class="endpoint-row">
           <span>SOCKS5</span>
-          <code>${escapeHtml(socks5Bind)}</code>
+          <div class="endpoint-copy-row">
+            <code>${escapeHtml(socks5Bind)}</code>
+            <button type="button" class="copy-button" data-copy-gateway="${socks5Bind === "未启用" ? "" : escapeHtml(socks5Bind)}" ${socks5Bind === "未启用" ? "disabled" : ""}>复制</button>
+          </div>
         </div>
       </div>
       <div class="gateway-card-meta">
@@ -627,6 +654,24 @@ async function saveExportTarget() {
   }
 }
 
+async function copyGatewayAddress(event) {
+  const button = event.target.closest("[data-copy-gateway]");
+  if (!button) return;
+  const value = button.dataset.copyGateway;
+  if (!value) return;
+  try {
+    await copyText(value);
+    const previous = button.textContent;
+    button.textContent = "已复制";
+    window.setTimeout(() => {
+      button.textContent = previous;
+    }, 1200);
+    toast("网关地址已复制", "success");
+  } catch (error) {
+    toast(error.message || "复制失败", "error");
+  }
+}
+
 async function cancelJob(event) {
   if (!state.activeJob) return;
   await withButton(event.currentTarget, "停止中", async () => {
@@ -716,6 +761,7 @@ function bindEvents() {
     el("quickCheckLimit").value = el("settingsCheckLimit").value;
   });
   el("exportTarget").addEventListener("change", saveExportTarget);
+  document.addEventListener("click", copyGatewayAddress);
   el("proxyPageSize").addEventListener("change", () => {
     state.proxies.limit = Number(el("proxyPageSize").value || 50);
     resetProxyPage();

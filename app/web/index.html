@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.1.11</span> · 额丶Y</small>
+            <small><span id="versionText">v0.1.12</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -185,114 +185,138 @@
             <button id="saveSettingsBtn" data-label="保存">保存</button>
           </div>
           <div class="settings-stack">
-            <label class="switch-row">
-              <input id="autoFetchEnabled" type="checkbox" />
-              <span>自动拉取</span>
-            </label>
-            <div class="mini-grid">
-              <label>
-                拉取间隔
-                <input id="autoFetchInterval" type="number" min="5" max="10080" />
-              </label>
-              <label>
-                单源上限
-                <input id="settingsFetchLimit" type="number" min="0" max="50000" />
-              </label>
-            </div>
-            <label class="switch-row">
-              <input id="autoFetchLowStockEnabled" type="checkbox" />
-              <span>待检不足自动拉取</span>
-            </label>
-            <div class="mini-grid">
-              <label>
-                待检阈值
-                <input id="autoFetchUntestedMinimum" type="number" min="100" max="1000000" />
-              </label>
-              <label>
-                补源冷却
-                <input id="autoFetchCooldown" type="number" min="1" max="1440" />
-              </label>
-            </div>
-            <label class="switch-row">
-              <input id="autoCheckEnabled" type="checkbox" />
-              <span>自动检测</span>
-            </label>
-            <div class="maintenance-grid">
-              <label class="switch-row">
-                <input id="deleteFailedOnCheck" type="checkbox" />
-                <span>失败即删</span>
-              </label>
-              <label class="switch-row">
-                <input id="recheckExpiredEnabled" type="checkbox" />
-                <span>可用过期转待检</span>
-              </label>
-            </div>
-            <div class="mini-grid">
-              <label>
-                可用有效期
-                <input id="availableTtlHours" type="number" min="1" max="8760" />
-              </label>
-              <label>
-                每页数量
-                <select id="proxyPageSize">
-                  <option value="20">20</option>
-                  <option value="50">50</option>
-                  <option value="100">100</option>
-                  <option value="200">200</option>
-                  <option value="500">500</option>
-                </select>
-              </label>
-            </div>
-            <div class="mini-grid">
-              <label>
-                检测间隔
-                <input id="autoCheckInterval" type="number" min="5" max="10080" />
-              </label>
-              <label>
-                批量
-                <input id="settingsCheckLimit" type="number" min="1" max="100000" />
-              </label>
-            </div>
-            <div class="mini-grid">
-              <label>
-                检测范围
-                <select id="settingsCheckStatus">
-                  <option value="untested">待检</option>
-                  <option value="failed">失败</option>
-                  <option value="available">可用</option>
-                  <option value="checked">已检</option>
-                  <option value="all">全部</option>
-                </select>
-              </label>
-              <div class="target-field">
-                <span>检测目标</span>
-                <div id="settingsCheckTargets" class="target-group">
-                  <label><input type="checkbox" value="generic" />常规</label>
-                  <label><input type="checkbox" value="openai" />OpenAI</label>
-                  <label><input type="checkbox" value="grok" />Grok</label>
-                  <label><input type="checkbox" value="gemini" />Gemini</label>
-                  <label><input type="checkbox" value="claude" />Claude</label>
+            <section class="settings-group fetch-group">
+              <div class="settings-group-head">
+                <strong>自动拉取</strong>
+                <span>定时补源与低库存补源</span>
+              </div>
+              <div class="settings-group-body">
+                <label class="switch-row">
+                  <input id="autoFetchEnabled" type="checkbox" />
+                  <span>自动拉取</span>
+                </label>
+                <div class="mini-grid">
+                  <label>
+                    拉取间隔
+                    <input id="autoFetchInterval" type="number" min="5" max="10080" />
+                  </label>
+                  <label>
+                    单源上限
+                    <input id="settingsFetchLimit" type="number" min="0" max="50000" />
+                  </label>
+                </div>
+                <label class="switch-row">
+                  <input id="autoFetchLowStockEnabled" type="checkbox" />
+                  <span>待检不足自动拉取</span>
+                </label>
+                <div class="mini-grid">
+                  <label>
+                    待检阈值
+                    <input id="autoFetchUntestedMinimum" type="number" min="100" max="1000000" />
+                  </label>
+                  <label>
+                    补源冷却
+                    <input id="autoFetchCooldown" type="number" min="1" max="1440" />
+                  </label>
                 </div>
               </div>
-            </div>
-            <div class="mini-grid four">
-              <label>
-                并发
-                <input id="settingsCheckConcurrent" type="number" min="1" max="300" />
-              </label>
-              <label>
-                轮次
-                <input id="settingsCheckRounds" type="number" min="1" max="5" />
-              </label>
-              <label>
-                超时
-                <input id="settingsCheckTimeout" type="number" min="2" max="60" />
-              </label>
-              <label>
-                硬超时
-                <input id="settingsCheckHardTimeout" type="number" min="2" max="300" />
-              </label>
-            </div>
+            </section>
+
+            <section class="settings-group check-group">
+              <div class="settings-group-head">
+                <strong>自动检测</strong>
+                <span>范围、目标和性能参数</span>
+              </div>
+              <div class="settings-group-body">
+                <label class="switch-row">
+                  <input id="autoCheckEnabled" type="checkbox" />
+                  <span>自动检测</span>
+                </label>
+                <div class="mini-grid three">
+                  <label>
+                    检测间隔
+                    <input id="autoCheckInterval" type="number" min="5" max="10080" />
+                  </label>
+                  <label>
+                    检测范围
+                    <select id="settingsCheckStatus">
+                      <option value="untested">待检</option>
+                      <option value="failed">失败</option>
+                      <option value="available">可用</option>
+                      <option value="checked">已检</option>
+                      <option value="all">全部</option>
+                    </select>
+                  </label>
+                  <label>
+                    批量
+                    <input id="settingsCheckLimit" type="number" min="1" max="100000" />
+                  </label>
+                </div>
+                <div class="target-field settings-targets">
+                  <span>检测目标</span>
+                  <div id="settingsCheckTargets" class="target-group">
+                    <label><input type="checkbox" value="generic" />常规</label>
+                    <label><input type="checkbox" value="openai" />OpenAI</label>
+                    <label><input type="checkbox" value="grok" />Grok</label>
+                    <label><input type="checkbox" value="gemini" />Gemini</label>
+                    <label><input type="checkbox" value="claude" />Claude</label>
+                  </div>
+                </div>
+                <div class="mini-grid four">
+                  <label>
+                    并发
+                    <input id="settingsCheckConcurrent" type="number" min="1" max="300" />
+                  </label>
+                  <label>
+                    轮次
+                    <input id="settingsCheckRounds" type="number" min="1" max="5" />
+                  </label>
+                  <label>
+                    超时
+                    <input id="settingsCheckTimeout" type="number" min="2" max="60" />
+                  </label>
+                  <label>
+                    硬超时
+                    <input id="settingsCheckHardTimeout" type="number" min="2" max="300" />
+                  </label>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-group maintenance-group">
+              <div class="settings-group-head">
+                <strong>维护与列表</strong>
+                <span>清理策略和仓库显示</span>
+              </div>
+              <div class="settings-group-body">
+                <div class="maintenance-grid">
+                  <label class="switch-row">
+                    <input id="deleteFailedOnCheck" type="checkbox" />
+                    <span>失败即删</span>
+                  </label>
+                  <label class="switch-row">
+                    <input id="recheckExpiredEnabled" type="checkbox" />
+                    <span>可用过期转待检</span>
+                  </label>
+                </div>
+                <div class="mini-grid">
+                  <label>
+                    可用有效期
+                    <input id="availableTtlHours" type="number" min="1" max="8760" />
+                  </label>
+                  <label>
+                    每页数量
+                    <select id="proxyPageSize">
+                      <option value="20">20</option>
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                      <option value="200">200</option>
+                      <option value="500">500</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
       </section>

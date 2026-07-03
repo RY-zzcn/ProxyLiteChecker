@@ -317,6 +317,10 @@ textarea {
   margin-bottom: 12px;
 }
 
+.config-grid {
+  align-items: stretch;
+}
+
 .settings-panel {
   grid-column: 1 / -1;
 }
@@ -537,6 +541,19 @@ textarea {
   font-size: 13px;
 }
 
+.sources-panel,
+.import-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 246px;
+}
+
+.sources-panel .source-list,
+.import-panel textarea {
+  flex: 1 1 auto;
+  min-height: 174px;
+}
+
 .progress {
   height: 10px;
   overflow: hidden;
@@ -565,9 +582,48 @@ textarea {
 
 .settings-stack {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-items: start;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(440px, 1.35fr) minmax(280px, 0.9fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.settings-group {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.settings-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.settings-group-head strong {
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.settings-group-head span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-group-body {
+  display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .switch-row {
@@ -609,10 +665,6 @@ textarea {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.settings-stack > .mini-grid.four {
-  grid-column: span 2;
-}
-
 .mini-grid label {
   display: grid;
   gap: 5px;
@@ -645,7 +697,22 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.settings-targets {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.settings-targets .target-group {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  min-height: 30px;
+}
+
 .settings-panel .target-group label {
+  justify-content: center;
   min-height: 28px;
   padding: 0 7px;
 }
@@ -832,9 +899,17 @@ td:not(.proxy-cell) {
   gap: 7px;
 }
 
-.endpoint-pair div {
+.endpoint-row {
   display: grid;
   gap: 4px;
+  min-width: 0;
+}
+
+.endpoint-copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
 }
 
 .endpoint-pair code {
@@ -851,6 +926,20 @@ td:not(.proxy-cell) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.copy-button {
+  min-height: 31px;
+  padding: 0 9px;
+  border: 1px solid #d9e3ec;
+  background: #eef3f8;
+  color: #263746;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.copy-button:hover {
+  background: #e1eaf3;
 }
 
 .recent-list {
@@ -979,6 +1068,10 @@ td:not(.proxy-cell) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .check-group {
+    grid-column: 1 / -1;
+  }
+
   .quick-action-grid,
   .gateway-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1020,8 +1113,12 @@ td:not(.proxy-cell) {
   }
 
   .settings-panel,
-  .settings-stack > .mini-grid.four {
+  .check-group {
     grid-column: auto;
+  }
+
+  .settings-targets .target-group {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .toolbar input,

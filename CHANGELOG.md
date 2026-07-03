@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.12 - 2026-07-03
+
+- Align the manual import panel height with the proxy source panel.
+- Reorganize automatic task settings into grouped fetch, check, and maintenance sections with a single-row desktop target selector.
+- Add copy buttons beside each HTTP/SOCKS5 local gateway address.
+
 ## 0.1.11 - 2026-07-03
 
 - Fix GitHub Release instructions for the per-target local gateway ports and Docker port mapping.
