@@ -17,6 +17,27 @@ ProxyLiteChecker 是 ProxyPoolChecker 的单机轻量版本。它没有面板和
 
 ## 快速开始
 
+### 方式一：Docker
+
+```bash
+docker run -d --name proxylitechecker \
+  -p 8899:8899 \
+  -p 18080:18080 \
+  -p 18081:18081 \
+  -e ADMIN_PASSWORD='请改成强密码' \
+  -e SECRET_KEY='请改成强随机字符串' \
+  -v proxylite-data:/app/data \
+  ghcr.io/ry-zzcn/proxylitechecker:latest
+```
+
+打开：
+
+```text
+http://服务器IP:8899
+```
+
+### 方式二：源码运行
+
 ```bash
 cd /root/ProxyLiteChecker
 go mod tidy
@@ -42,6 +63,92 @@ admin / admin123
 ADMIN_PASSWORD=请改成强密码
 SECRET_KEY=请改成强随机字符串
 ```
+
+## Docker 镜像
+
+GitHub Packages 镜像地址：
+
+```text
+ghcr.io/ry-zzcn/proxylitechecker
+```
+
+常用标签：
+
+| 标签 | 说明 |
+| --- | --- |
+| `latest` | `main` 分支最新镜像 |
+| `v0.1.5` / 其它 `v*` | 对应版本镜像 |
+| `0.1` | 对应小版本线最新镜像 |
+
+查看仓库 Packages 页面：
+
+```text
+https://github.com/RY-zzcn/ProxyLiteChecker/pkgs/container/proxylitechecker
+```
+
+如果仓库或 Package 是私有的，拉取镜像需要先登录 GHCR：
+
+```bash
+echo '你的 GitHub PAT' | docker login ghcr.io -u 你的GitHub用户名 --password-stdin
+```
+
+## Release 二进制文件说明
+
+Release 中的二进制从 `v0.1.5` 开始内置 Web UI，下载后可以直接运行，不需要额外放置 `app/web` 目录。
+
+| 文件名 | 适用系统 | 说明 |
+| --- | --- | --- |
+| `proxylite-linux-amd64` | Linux x86_64 / amd64 | 常见 VPS、服务器、Intel/AMD Linux |
+| `proxylite-linux-arm64` | Linux arm64 / aarch64 | ARM VPS、树莓派 4/5 64 位、部分 NAS |
+| `proxylite-linux-armv7` | Linux armv7 | 32 位 ARM 设备 |
+| `proxylite-windows-amd64.exe` | Windows 64 位 | Windows 10/11、Windows Server 64 位 |
+| `proxylite-darwin-amd64` | macOS Intel | Intel Mac |
+| `proxylite-darwin-arm64` | macOS Apple Silicon | M1/M2/M3/M4 Mac |
+| `proxylitechecker-vX.Y.Z.tar.gz` | 源码/静态资源包 | 包含 README、脚本、Docker Compose 和静态资源 |
+| `SHA256SUMS` | 校验文件 | 用于核对下载文件完整性 |
+
+### Linux 运行
+
+```bash
+chmod +x proxylite-linux-amd64
+ADMIN_PASSWORD='请改成强密码' SECRET_KEY='请改成强随机字符串' ./proxylite-linux-amd64
+```
+
+打开：
+
+```text
+http://服务器IP:8899
+```
+
+### Windows 运行
+
+Windows 64 位下载 `proxylite-windows-amd64.exe`。建议在 PowerShell 中运行，这样可以设置密码和查看日志：
+
+```powershell
+$env:ADMIN_PASSWORD="请改成强密码"
+$env:SECRET_KEY="请改成强随机字符串"
+.\proxylite-windows-amd64.exe
+```
+
+打开：
+
+```text
+http://127.0.0.1:8899
+```
+
+如果浏览器或系统提示下载的 exe 被阻止，可以在 PowerShell 执行：
+
+```powershell
+Unblock-File .\proxylite-windows-amd64.exe
+```
+
+如果需要其它设备或 Docker 容器访问 Windows 上的服务，请在 Windows 防火墙中放行：
+
+| 端口 | 用途 |
+| --- | --- |
+| `8899` | Web UI 和 API |
+| `18080` | HTTP 代理网关 |
+| `18081` | SOCKS5 代理网关 |
 
 ## 默认端口
 

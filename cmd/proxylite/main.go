@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -14,10 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	webassets "github.com/RY-zzcn/ProxyLiteChecker/app/web"
 )
 
 const (
-	appVersion           = "0.1.4"
+	appVersion           = "0.1.5"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -403,7 +406,15 @@ func (s *server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	http.StripPrefix("/static/", http.FileServer(http.Dir(filepath.Join(s.cfg.WebDir, "static")))).ServeHTTP(w, r)
+	localPath := filepath.Join(s.cfg.WebDir, strings.TrimPrefix(r.URL.Path, "/"))
+	if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, localPath)
+		return
+	}
+	if serveEmbeddedWebFile(w, r, strings.TrimPrefix(r.URL.Path, "/")) {
+		return
+	}
+	errorResponse(w, http.StatusNotFound, "static asset not found")
 }
 
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -419,7 +430,27 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, path)
 		return
 	}
+	requested := strings.TrimPrefix(r.URL.Path, "/")
+	if requested != "" && serveEmbeddedWebFile(w, r, requested) {
+		return
+	}
+	if serveEmbeddedWebFile(w, r, "index.html") {
+		return
+	}
 	http.ServeFile(w, r, filepath.Join(s.cfg.WebDir, "index.html"))
+}
+
+func serveEmbeddedWebFile(w http.ResponseWriter, r *http.Request, name string) bool {
+	name = strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(name)), "/")
+	if name == "" {
+		name = "index.html"
+	}
+	raw, err := webassets.FS.ReadFile(name)
+	if err != nil {
+		return false
+	}
+	http.ServeContent(w, r, filepath.Base(name), time.Time{}, bytes.NewReader(raw))
+	return true
 }
 
 func (s *server) withAuth(next http.HandlerFunc) http.HandlerFunc {

@@ -56,4 +56,50 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
+          body: |
+            ## 下载哪个文件
+
+            | 文件名 | 适用系统 | 说明 |
+            | --- | --- | --- |
+            | `proxylite-linux-amd64` | Linux x86_64 / amd64 | 常见 VPS、服务器、Intel/AMD Linux |
+            | `proxylite-linux-arm64` | Linux arm64 / aarch64 | ARM VPS、树莓派 4/5 64 位、部分 NAS |
+            | `proxylite-linux-armv7` | Linux armv7 | 32 位 ARM 设备 |
+            | `proxylite-windows-amd64.exe` | Windows 64 位 | Windows 10/11、Windows Server 64 位，可直接运行 |
+            | `proxylite-darwin-amd64` | macOS Intel | Intel Mac |
+            | `proxylite-darwin-arm64` | macOS Apple Silicon | M1/M2/M3/M4 Mac |
+            | `proxylitechecker-${{ github.ref_name }}.tar.gz` | 源码/静态资源包 | 包含 README、脚本、Docker Compose 和静态资源 |
+            | `SHA256SUMS` | 校验文件 | 用于核对下载文件完整性 |
+
+            ## Windows 运行
+
+            下载 `proxylite-windows-amd64.exe` 后，在 PowerShell 中运行：
+
+            ```powershell
+            $env:ADMIN_PASSWORD="请改成强密码"
+            $env:SECRET_KEY="请改成强随机字符串"
+            .\proxylite-windows-amd64.exe
+            ```
+
+            打开 `http://127.0.0.1:8899` 登录。HTTP 网关默认是 `18080`，SOCKS5 网关默认是 `18081`。如果要给其它机器或容器访问，请在 Windows 防火墙中放行对应端口。
+
+            ## Docker 镜像
+
+            Docker 镜像发布到 GitHub Packages：
+
+            ```bash
+            docker pull ghcr.io/ry-zzcn/proxylitechecker:${{ github.ref_name }}
+            ```
+
+            运行示例：
+
+            ```bash
+            docker run -d --name proxylitechecker \
+              -p 8899:8899 \
+              -p 18080:18080 \
+              -p 18081:18081 \
+              -e ADMIN_PASSWORD='请改成强密码' \
+              -e SECRET_KEY='请改成强随机字符串' \
+              -v proxylite-data:/app/data \
+              ghcr.io/ry-zzcn/proxylitechecker:${{ github.ref_name }}
+            ```
           files: dist/*

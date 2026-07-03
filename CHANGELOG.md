@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 - 2026-07-03
+
+- Add GHCR Docker image publishing for `main` and `v*` tags.
+- Embed the web console into release binaries so Windows/Linux/macOS binaries can run directly.
+- Add release asset descriptions and Windows run instructions to README and GitHub Release notes.
+
 ## 0.1.4 - 2026-07-03
 
 - Expand built-in proxy sources from the initial stable subset to 30+ sources.

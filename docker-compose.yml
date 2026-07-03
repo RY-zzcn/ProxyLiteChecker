@@ -1,10 +1,12 @@
 services:
   proxylitechecker:
+    image: ghcr.io/ry-zzcn/proxylitechecker:v0.1.5
     build: .
     container_name: proxylitechecker
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     ports:
       - "8899:8899"
       - "18080:18080"
