@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.1.7</span> · 额丶Y</small>
+            <small><span id="versionText">v0.1.8</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -81,7 +81,7 @@
             </button>
             <button id="runCheckBtn" class="action-button accent" data-label="本机检测">
               <strong>本机检测</strong>
-              <span>按检测设置执行</span>
+              <span>按下方参数执行</span>
             </button>
             <a class="action-button link" href="/api/export/proxies.txt" target="_blank">
               <strong>TXT 导出</strong>
@@ -91,6 +91,32 @@
               <strong>JSON 导出</strong>
               <span>包含检测元数据</span>
             </a>
+          </div>
+          <div class="quick-check-bar">
+            <label>
+              范围
+              <select id="quickCheckStatus">
+                <option value="untested">待检</option>
+                <option value="failed">失败</option>
+                <option value="available">可用</option>
+                <option value="checked">已检</option>
+                <option value="all">全部</option>
+              </select>
+            </label>
+            <label>
+              目标
+              <select id="quickCheckTarget">
+                <option value="generic">常规</option>
+                <option value="openai">OpenAI</option>
+                <option value="grok">Grok</option>
+                <option value="gemini">Gemini</option>
+                <option value="claude">Claude</option>
+              </select>
+            </label>
+            <label>
+              数量
+              <input id="quickCheckLimit" type="number" min="1" max="100000" />
+            </label>
           </div>
         </section>
 

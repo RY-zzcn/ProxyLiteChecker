@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.8 - 2026-07-03
+
+- Add visible quick-check controls for check range, target profile, and batch size beside the local check action.
+- Sync quick-check controls with the full runtime settings panel.
+- Tighten dashboard panel spacing and reduce action card height for a denser single-page console.
+- Replace the bright local-check button background with a quieter status-style treatment.
+
 ## 0.1.7 - 2026-07-03
 
 - Add automatic failed-proxy cleanup with optional immediate delete on failed check results.

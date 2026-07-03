@@ -212,6 +212,9 @@ function renderSettings(settings, scheduler) {
   el("settingsCheckStatus").value = state.settings.check_status;
   el("settingsCheckTarget").value = state.settings.check_target_profile;
   el("settingsCheckLimit").value = state.settings.check_limit;
+  el("quickCheckStatus").value = state.settings.check_status;
+  el("quickCheckTarget").value = state.settings.check_target_profile;
+  el("quickCheckLimit").value = state.settings.check_limit;
   el("settingsCheckConcurrent").value = state.settings.check_concurrent;
   el("settingsCheckRounds").value = state.settings.check_rounds;
   el("settingsCheckTimeout").value = state.settings.check_request_timeout;
@@ -410,9 +413,9 @@ async function runCheck(event) {
     const payload = await api("/api/checks/run-job", {
       method: "POST",
       body: JSON.stringify({
-        status: el("settingsCheckStatus").value,
-        target_profile: el("settingsCheckTarget").value,
-        limit: Number(el("settingsCheckLimit").value || 500),
+        status: el("quickCheckStatus").value,
+        target_profile: el("quickCheckTarget").value,
+        limit: Number(el("quickCheckLimit").value || 500),
         concurrent: Number(el("settingsCheckConcurrent").value || 50),
         rounds: Number(el("settingsCheckRounds").value || 1),
         request_timeout: checkTimeout,
@@ -546,6 +549,24 @@ function bindEvents() {
   });
   el("sourceLimit").addEventListener("input", () => {
     el("settingsFetchLimit").value = el("sourceLimit").value;
+  });
+  el("quickCheckStatus").addEventListener("change", () => {
+    el("settingsCheckStatus").value = el("quickCheckStatus").value;
+  });
+  el("quickCheckTarget").addEventListener("change", () => {
+    el("settingsCheckTarget").value = el("quickCheckTarget").value;
+  });
+  el("quickCheckLimit").addEventListener("input", () => {
+    el("settingsCheckLimit").value = el("quickCheckLimit").value;
+  });
+  el("settingsCheckStatus").addEventListener("change", () => {
+    el("quickCheckStatus").value = el("settingsCheckStatus").value;
+  });
+  el("settingsCheckTarget").addEventListener("change", () => {
+    el("quickCheckTarget").value = el("settingsCheckTarget").value;
+  });
+  el("settingsCheckLimit").addEventListener("input", () => {
+    el("quickCheckLimit").value = el("settingsCheckLimit").value;
   });
   el("proxyPageSize").addEventListener("change", () => {
     state.proxies.limit = Number(el("proxyPageSize").value || 50);

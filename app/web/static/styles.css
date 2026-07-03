@@ -120,7 +120,7 @@ textarea:focus {
 
 textarea {
   width: 100%;
-  min-height: 214px;
+  min-height: 190px;
   resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
@@ -192,7 +192,7 @@ textarea {
 .app-shell {
   width: min(1500px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 18px 0 28px;
+  padding: 14px 0 24px;
 }
 
 .workspace-header {
@@ -203,8 +203,8 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
-  padding: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
   background: rgb(255 255 255 / 86%);
   border: 1px solid rgb(216 225 234 / 80%);
   border-radius: 8px;
@@ -256,8 +256,8 @@ textarea {
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .metric,
@@ -271,9 +271,9 @@ textarea {
 
 .metric {
   position: relative;
-  min-height: 96px;
+  min-height: 82px;
   overflow: hidden;
-  padding: 16px;
+  padding: 14px;
 }
 
 .metric::after {
@@ -301,13 +301,13 @@ textarea {
 .metric span {
   display: block;
   color: var(--muted);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .metric strong {
   position: relative;
   z-index: 1;
-  font-size: 32px;
+  font-size: 29px;
   line-height: 1;
 }
 
@@ -326,27 +326,27 @@ textarea {
 .workbench {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .content-grid {
   display: grid;
   grid-template-columns: minmax(360px, 0.95fr) minmax(360px, 0.95fr) minmax(420px, 1.1fr);
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .panel {
-  padding: 18px;
+  padding: 14px;
 }
 
 .panel-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 14px;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
 .panel-head.wrap {
@@ -356,20 +356,20 @@ textarea {
 .panel h2,
 .panel-head h2 {
   margin: 0 0 4px;
-  font-size: 18px;
+  font-size: 17px;
 }
 
 .action-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .action-button {
   display: grid;
-  gap: 6px;
-  min-height: 88px;
-  padding: 14px;
+  gap: 4px;
+  min-height: 72px;
+  padding: 12px;
   text-align: left;
   text-decoration: none;
   color: var(--text);
@@ -387,19 +387,43 @@ textarea {
 }
 
 .action-button.accent {
-  color: #fff;
-  background: linear-gradient(135deg, #2563eb, #0f766e);
-  border-color: transparent;
-  box-shadow: 0 12px 24px rgb(37 99 235 / 18%);
+  color: #153c39;
+  background: #e7f3f1;
+  border-color: #b7ddd7;
+  box-shadow: none;
+}
+
+.action-button.accent strong {
+  color: #0f665f;
 }
 
 .action-button.accent span {
-  color: rgb(255 255 255 / 78%);
+  color: #54736f;
 }
 
 .action-button.link {
   background: #fff7ed;
   border-color: #fed7aa;
+}
+
+.quick-check-bar {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(130px, 1fr) minmax(120px, 0.75fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.quick-check-bar label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.quick-check-bar input,
+.quick-check-bar select {
+  width: 100%;
+  min-width: 0;
 }
 
 .repo-link {
@@ -425,7 +449,7 @@ textarea {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -444,8 +468,8 @@ textarea {
 .source-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  max-height: 236px;
+  gap: 7px;
+  max-height: 218px;
   overflow: auto;
   padding-right: 2px;
 }
@@ -455,7 +479,7 @@ textarea {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 8px 10px;
+  padding: 7px 9px;
   background: var(--surface-soft);
   border: 1px solid transparent;
   border-radius: 7px;
@@ -507,7 +531,7 @@ textarea {
 
 .settings-stack {
   display: grid;
-  gap: 12px;
+  gap: 9px;
 }
 
 .switch-row {
@@ -515,8 +539,8 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 36px;
-  padding: 8px 10px;
+  min-height: 32px;
+  padding: 6px 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface-soft);
@@ -532,13 +556,13 @@ textarea {
 .maintenance-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
+  gap: 7px;
 }
 
 .mini-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
+  gap: 7px;
 }
 
 .mini-grid.three {
@@ -828,6 +852,7 @@ td:not(.proxy-cell) {
   .metric-grid,
   .gateway-strip,
   .action-grid,
+  .quick-check-bar,
   .source-list,
   .maintenance-grid,
   .mini-grid,
