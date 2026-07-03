@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ProxyLiteChecker">
+  <rect width="64" height="64" rx="14" fill="#13212d"/>
+  <path d="M18 40V18h17c8 0 13 4 13 11s-5 11-13 11h-8v6H18zm9-14v8h8c3 0 5-1 5-4s-2-4-5-4h-8z" fill="#f8fafc"/>
+  <path d="M20 49c10 5 25 4 35-7" fill="none" stroke="#2dd4bf" stroke-width="5" stroke-linecap="round"/>
+  <path d="M45 45h10v-10" fill="none" stroke="#f59e0b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

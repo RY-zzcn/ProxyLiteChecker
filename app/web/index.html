@@ -4,16 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ProxyLiteChecker</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <main id="loginView" class="login-view" hidden>
       <form id="loginForm" class="login-panel">
         <div class="login-brand">
-          <span class="brand-mark">P</span>
+          <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <h1>ProxyLiteChecker</h1>
-            <p>单机代理池</p>
+            <p>额丶Y · 单机代理池</p>
           </div>
         </div>
         <label>
@@ -32,13 +33,14 @@
     <main id="appView" class="app-shell" hidden>
       <header class="workspace-header">
         <div class="brand">
-          <span class="brand-mark">P</span>
+          <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small id="versionText">v0.1.2</small>
+            <small><span id="versionText">v0.1.3</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
+          <a class="repo-link" href="https://github.com/RY-zzcn/ProxyLiteChecker" target="_blank" rel="noreferrer">GitHub</a>
           <span id="gatewayPill" class="status-pill">网关未连接</span>
           <button id="refreshBtn" class="secondary" data-label="刷新">刷新</button>
           <button id="logoutBtn" class="ghost" data-label="退出">退出</button>
@@ -199,6 +201,11 @@
           <strong id="gatewayRate">0%</strong>
         </article>
       </section>
+
+      <footer class="app-footer">
+        <span>作者：额丶Y</span>
+        <a href="https://github.com/RY-zzcn/ProxyLiteChecker" target="_blank" rel="noreferrer">github.com/RY-zzcn/ProxyLiteChecker</a>
+      </footer>
     </main>
 
     <div id="toastHost" class="toast-host" aria-live="polite"></div>

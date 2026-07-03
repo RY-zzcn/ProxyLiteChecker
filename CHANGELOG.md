@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 - 2026-07-03
+
+- Change the default HTTP gateway bind address to `0.0.0.0` for Docker and LAN consumers.
+- Add project icon, author attribution, and repository link to the web UI.
+- Refresh the console color palette and surface styling.
+
 ## 0.1.2 - 2026-07-03
 
 - Add GitHub Actions CI for tests, vet, and build checks.

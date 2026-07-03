@@ -36,10 +36,10 @@ Default web address:
 http://127.0.0.1:8899
 ```
 
-Default local HTTP gateway:
+Default HTTP gateway:
 
 ```text
-http://127.0.0.1:18080
+http://0.0.0.0:18080
 ```
 
 ## Guardrails

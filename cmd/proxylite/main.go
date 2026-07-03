@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	appVersion           = "0.1.2"
+	appVersion           = "0.1.3"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -95,7 +95,7 @@ func loadConfig() config {
 		WebDir:               webDir,
 		ExportToken:          envString("PLC_EXPORT_TOKEN", ""),
 		GatewayEnabled:       envBool("PLC_GATEWAY_ENABLED", true),
-		GatewayHost:          envString("PLC_GATEWAY_HOST", "127.0.0.1"),
+		GatewayHost:          envString("PLC_GATEWAY_HOST", "0.0.0.0"),
 		GatewayPort:          clampInt(envInt("PLC_GATEWAY_PORT", 18080), 1, 65535),
 		GatewayUpstreamLimit: clampInt(envInt("PLC_GATEWAY_UPSTREAM_LIMIT", 200), 1, 2000),
 	}

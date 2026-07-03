@@ -161,7 +161,7 @@ function updateSelectedSources() {
 }
 
 function renderGateway(gateway) {
-  const bind = gateway.enabled ? gateway.bind || `${gateway.host}:${gateway.port}` : "未启用";
+  const bind = gateway.enabled ? displayGatewayBind(gateway) : "未启用";
   const upstreams = gateway.upstreams || 0;
   el("gatewayBind").textContent = bind;
   el("gatewayUpstreams").textContent = upstreams;
@@ -170,6 +170,18 @@ function renderGateway(gateway) {
   const pill = el("gatewayPill");
   pill.textContent = gateway.enabled ? `${bind} · ${upstreams} 上游` : "网关未启用";
   pill.classList.toggle("offline", !gateway.enabled);
+}
+
+function displayGatewayBind(gateway) {
+  const fallback = gateway.bind || `${gateway.host}:${gateway.port}`;
+  const port = gateway.port || String(fallback).split(":").pop();
+  if (gateway.host === "0.0.0.0" || String(fallback).startsWith("0.0.0.0:")) {
+    return `${location.hostname || "服务器IP"}:${port}`;
+  }
+  if (gateway.host === "::" || String(fallback).startsWith("[::]:")) {
+    return `${location.hostname || "服务器IP"}:${port}`;
+  }
+  return fallback;
 }
 
 function renderJobs(jobs) {
