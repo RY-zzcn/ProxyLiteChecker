@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	appVersion           = "0.1.8"
+	appVersion           = "0.1.9"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -434,25 +434,41 @@ func (s *server) gatewayPayload() map[string]any {
 }
 
 func (s *server) handleExportTXT(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ExportAvailable(r.URL.Query().Get("target_profile"), clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000))
+	items, err := s.store.ExportAvailable(exportTargetProfileQuery(r), clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000))
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	lines := make([]string, 0, len(items))
+	seen := map[string]bool{}
 	for _, item := range items {
-		lines = append(lines, item.ProxyURL())
+		proxyURL := item.ProxyURL()
+		if !seen[proxyURL] {
+			seen[proxyURL] = true
+			lines = append(lines, proxyURL)
+		}
 	}
 	writeText(w, "text/plain; charset=utf-8", strings.Join(lines, "\n"))
 }
 
 func (s *server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ExportAvailable(r.URL.Query().Get("target_profile"), clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000))
+	targetProfile := exportTargetProfileQuery(r)
+	items, err := s.store.ExportAvailable(targetProfile, clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000))
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonResponse(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
+	jsonResponse(w, http.StatusOK, map[string]any{"items": items, "total": len(items), "target_profile": targetProfile})
+}
+
+func exportTargetProfileQuery(r *http.Request) string {
+	values := []string{}
+	for _, key := range []string{"target_profile", "target_profiles"} {
+		for _, value := range r.URL.Query()[key] {
+			values = append(values, anyToStringSlice(value)...)
+		}
+	}
+	return strings.Join(values, ",")
 }
 
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {

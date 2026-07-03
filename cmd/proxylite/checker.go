@@ -71,6 +71,13 @@ type singleCheckResult struct {
 	BaseReachable bool
 }
 
+type checkPlan struct {
+	TargetProfile string
+	Items         []ProxyTask
+}
+
+var targetProfileOrder = []string{"generic", "openai", "grok", "gemini", "claude"}
+
 var targetProfiles = map[string]TargetProfile{
 	"generic": {ServiceURL: "https://example.com/"},
 	"openai":  {ServiceURL: "https://chat.openai.com/", APIURL: "https://api.openai.com/v1/models"},
@@ -90,8 +97,12 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	if _, _, err := s.applyProxyMaintenance(settings); err != nil {
 		return nil, err
 	}
+	fallbackProfiles := settings.CheckTargetProfiles
+	if len(fallbackProfiles) == 0 {
+		fallbackProfiles = []string{settings.CheckTargetProfile}
+	}
+	targetProfiles := targetProfilesFromPayload(payload, fallbackProfiles)
 	cfg := CheckConfig{
-		TargetProfile:  normalizeTargetProfile(optionalString(payload["target_profile"], "generic")),
 		Limit:          optionalLimit(payload["limit"], 200, 100000),
 		Concurrent:     optionalLimit(payload["concurrent"], 30, 300),
 		Rounds:         optionalLimit(payload["rounds"], 1, 5),
@@ -100,18 +111,28 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 		DeleteFailed:   settings.DeleteFailedOnCheck,
 	}
 	status := optionalString(payload["status"], "untested")
-	items, err := s.store.ListCheckCandidates(status, cfg.Limit, cfg.TargetProfile)
-	if err != nil {
-		return nil, err
+	plans := make([]checkPlan, 0, len(targetProfiles))
+	total := 0
+	for _, profile := range targetProfiles {
+		items, err := s.store.ListCheckCandidates(status, cfg.Limit, profile)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, checkPlan{TargetProfile: profile, Items: items})
+		total += len(items)
 	}
 	job, ctx := s.jobs.Create("check", "准备本机检测")
-	s.jobs.Update(job.ID, map[string]any{"total": len(items), "message": fmt.Sprintf("本机检测排队：%d 条", len(items))})
-	go s.runCheckJob(ctx, job.ID, items, cfg)
-	return map[string]any{"job_id": job.ID, "count": len(items)}, nil
+	s.jobs.Update(job.ID, map[string]any{
+		"total":   total,
+		"message": fmt.Sprintf("本机检测排队：%d 条 / %d 个目标", total, len(targetProfiles)),
+	})
+	go s.runCheckJob(ctx, job.ID, plans, cfg)
+	return map[string]any{"job_id": job.ID, "count": total, "target_profiles": targetProfiles}, nil
 }
 
-func (s *server) runCheckJob(ctx context.Context, jobID string, items []ProxyTask, cfg CheckConfig) {
-	if len(items) == 0 {
+func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPlan, cfg CheckConfig) {
+	total := totalCheckPlanItems(plans)
+	if total == 0 {
 		s.jobs.complete(jobID, "没有符合条件的代理需要检测", map[string]any{"checked": 0})
 		return
 	}
@@ -119,46 +140,60 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, items []ProxyTas
 	available := 0
 	failed := 0
 	deletedFailed := 0
-	for result := range checkBatchStream(ctx, items, cfg) {
-		if result.Status == "failed" && cfg.DeleteFailed {
-			if err := s.store.DeleteProxyByID(result.ProxyID); err != nil {
+	deletedIDs := map[int]bool{}
+	for _, plan := range plans {
+		if ctx.Err() != nil {
+			break
+		}
+		items := filterDeletedCheckItems(plan.Items, deletedIDs)
+		if len(items) == 0 {
+			continue
+		}
+		planCfg := cfg
+		planCfg.TargetProfile = plan.TargetProfile
+		for result := range checkBatchStream(ctx, items, planCfg) {
+			if result.Status == "failed" && planCfg.DeleteFailed {
+				if err := s.store.DeleteProxyByID(result.ProxyID); err != nil {
+					failed++
+				} else {
+					failed++
+					deletedFailed++
+					deletedIDs[result.ProxyID] = true
+				}
+			} else if err := s.store.SaveCheckResult(result); err != nil {
 				failed++
+			} else if result.Status == "available" {
+				available++
 			} else {
 				failed++
-				deletedFailed++
 			}
-		} else if err := s.store.SaveCheckResult(result); err != nil {
-			failed++
-		} else if result.Status == "available" {
-			available++
-		} else {
-			failed++
-		}
-		done++
-		if done == 1 || done%10 == 0 || done == len(items) {
-			s.jobs.Update(jobID, map[string]any{
-				"done":    done,
-				"total":   len(items),
-				"success": available,
-				"failed":  failed,
-				"message": checkProgressMessage(done, len(items), available, failed, deletedFailed, cfg.DeleteFailed),
-			})
+			done++
+			if done == 1 || done%10 == 0 || done == total {
+				s.jobs.Update(jobID, map[string]any{
+					"done":    done,
+					"total":   total,
+					"success": available,
+					"failed":  failed,
+					"message": checkProgressMessage(done, total, plan.TargetProfile, available, failed, deletedFailed, cfg.DeleteFailed),
+				})
+			}
 		}
 	}
 	if ctx.Err() != nil {
 		s.jobs.finishCancelled(jobID, "本机检测已停止")
 		return
 	}
-	result := map[string]any{"checked": done, "available": available, "failed": failed, "deleted_failed": deletedFailed, "target_profile": cfg.TargetProfile}
-	s.jobs.Update(jobID, map[string]any{"done": done, "total": len(items), "success": available, "failed": failed})
+	result := map[string]any{"checked": done, "available": available, "failed": failed, "deleted_failed": deletedFailed, "target_profiles": checkPlanProfiles(plans)}
+	s.jobs.Update(jobID, map[string]any{"done": done, "total": total, "success": available, "failed": failed})
 	s.jobs.complete(jobID, checkCompleteMessage(available, failed, deletedFailed, cfg.DeleteFailed), result)
 }
 
-func checkProgressMessage(done int, total int, available int, failed int, deletedFailed int, deleteFailed bool) string {
+func checkProgressMessage(done int, total int, targetProfile string, available int, failed int, deletedFailed int, deleteFailed bool) string {
+	targetText := targetProfileLabel(targetProfile)
 	if deleteFailed {
-		return fmt.Sprintf("本机检测进行中：%d/%d，可用 %d，失败删除 %d", done, total, available, deletedFailed)
+		return fmt.Sprintf("本机检测进行中：%d/%d，目标 %s，可用 %d，失败删除 %d", done, total, targetText, available, deletedFailed)
 	}
-	return fmt.Sprintf("本机检测进行中：%d/%d，可用 %d，失败 %d", done, total, available, failed)
+	return fmt.Sprintf("本机检测进行中：%d/%d，目标 %s，可用 %d，失败 %d", done, total, targetText, available, failed)
 }
 
 func checkCompleteMessage(available int, failed int, deletedFailed int, deleteFailed bool) string {
@@ -174,6 +209,99 @@ func normalizeTargetProfile(value string) string {
 		return value
 	}
 	return "generic"
+}
+
+func normalizeTargetProfileOrAll(value string, fallback string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "all" {
+		return "all"
+	}
+	if _, ok := targetProfiles[value]; ok {
+		return value
+	}
+	return normalizeTargetProfile(fallback)
+}
+
+func normalizeTargetProfiles(values []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "all" {
+			return append([]string{}, targetProfileOrder...)
+		}
+		if _, ok := targetProfiles[value]; ok && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"generic"}
+	}
+	return out
+}
+
+func normalizeTargetProfilesOrNil(value string) []string {
+	values := anyToStringSlice(value)
+	if len(values) == 0 {
+		return nil
+	}
+	return normalizeTargetProfiles(values)
+}
+
+func targetProfilesFromPayload(payload map[string]any, fallback []string) []string {
+	values := anyToStringSlice(payload["target_profiles"])
+	if len(values) == 0 {
+		values = anyToStringSlice(payload["target_profile"])
+	}
+	if len(values) == 0 {
+		values = fallback
+	}
+	return normalizeTargetProfiles(values)
+}
+
+func targetProfileLabel(value string) string {
+	switch normalizeTargetProfile(value) {
+	case "openai":
+		return "OpenAI"
+	case "grok":
+		return "Grok"
+	case "gemini":
+		return "Gemini"
+	case "claude":
+		return "Claude"
+	default:
+		return "常规"
+	}
+}
+
+func totalCheckPlanItems(plans []checkPlan) int {
+	total := 0
+	for _, plan := range plans {
+		total += len(plan.Items)
+	}
+	return total
+}
+
+func checkPlanProfiles(plans []checkPlan) []string {
+	out := make([]string, 0, len(plans))
+	for _, plan := range plans {
+		out = append(out, plan.TargetProfile)
+	}
+	return out
+}
+
+func filterDeletedCheckItems(items []ProxyTask, deletedIDs map[int]bool) []ProxyTask {
+	if len(deletedIDs) == 0 {
+		return items
+	}
+	out := make([]ProxyTask, 0, len(items))
+	for _, item := range items {
+		if !deletedIDs[item.ID] {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func checkBatchStream(ctx context.Context, items []ProxyTask, cfg CheckConfig) <-chan CheckResult {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.9 - 2026-07-03
+
+- Add per-target proxy check storage so one proxy can keep separate results for generic, OpenAI, Grok, Gemini, and Claude targets.
+- Support multi-target manual and automatic check jobs from the web console.
+- Add target-aware HTTP/SOCKS5 gateway upstream selection with live recent-upstream display.
+- Add target-aware TXT / JSON export controls and query handling.
+- Reorder the single-page console so proxy source, import, and settings stay compact, gateway status sits above the repository, and the proxy repository remains last.
+
 ## 0.1.8 - 2026-07-03
 
 - Add visible quick-check controls for check range, target profile, and batch size beside the local check action.

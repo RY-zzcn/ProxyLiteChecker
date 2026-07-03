@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.1.8</span> · 额丶Y</small>
+            <small><span id="versionText">v0.1.9</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -83,13 +83,13 @@
               <strong>本机检测</strong>
               <span>按下方参数执行</span>
             </button>
-            <a class="action-button link" href="/api/export/proxies.txt" target="_blank">
+            <a id="exportTxtLink" class="action-button link" href="/api/export/proxies.txt" target="_blank">
               <strong>TXT 导出</strong>
-              <span>仅输出可用代理</span>
+              <span>按导出目标输出</span>
             </a>
-            <a class="action-button link" href="/api/export/proxies.json" target="_blank">
+            <a id="exportJsonLink" class="action-button link" href="/api/export/proxies.json" target="_blank">
               <strong>JSON 导出</strong>
-              <span>包含检测元数据</span>
+              <span>包含目标元数据</span>
             </a>
           </div>
           <div class="quick-check-bar">
@@ -103,19 +103,30 @@
                 <option value="all">全部</option>
               </select>
             </label>
+            <div class="target-field">
+              <span>检测目标</span>
+              <div id="quickCheckTargets" class="target-group compact">
+                <label><input type="checkbox" value="generic" />常规</label>
+                <label><input type="checkbox" value="openai" />OpenAI</label>
+                <label><input type="checkbox" value="grok" />Grok</label>
+                <label><input type="checkbox" value="gemini" />Gemini</label>
+                <label><input type="checkbox" value="claude" />Claude</label>
+              </div>
+            </div>
             <label>
-              目标
-              <select id="quickCheckTarget">
+              数量
+              <input id="quickCheckLimit" type="number" min="1" max="100000" />
+            </label>
+            <label>
+              导出目标
+              <select id="exportTarget">
                 <option value="generic">常规</option>
                 <option value="openai">OpenAI</option>
                 <option value="grok">Grok</option>
                 <option value="gemini">Gemini</option>
                 <option value="claude">Claude</option>
+                <option value="all">全部目标</option>
               </select>
-            </label>
-            <label>
-              数量
-              <input id="quickCheckLimit" type="number" min="1" max="100000" />
             </label>
           </div>
         </section>
@@ -253,16 +264,16 @@
                   <option value="all">全部</option>
                 </select>
               </label>
-              <label>
-                目标
-                <select id="settingsCheckTarget">
-                  <option value="generic">常规</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="grok">Grok</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="claude">Claude</option>
-                </select>
-              </label>
+              <div class="target-field">
+                <span>检测目标</span>
+                <div id="settingsCheckTargets" class="target-group">
+                  <label><input type="checkbox" value="generic" />常规</label>
+                  <label><input type="checkbox" value="openai" />OpenAI</label>
+                  <label><input type="checkbox" value="grok" />Grok</label>
+                  <label><input type="checkbox" value="gemini" />Gemini</label>
+                  <label><input type="checkbox" value="claude" />Claude</label>
+                </div>
+              </div>
             </div>
             <div class="mini-grid four">
               <label>
@@ -286,6 +297,53 @@
         </section>
       </section>
 
+      <section class="gateway-block">
+        <div class="section-head">
+          <div>
+            <h2>本机代理网关</h2>
+            <p id="gatewaySummary">按目标轮询可用上游</p>
+          </div>
+          <label class="compact-label">
+            网关目标
+            <select id="gatewayTarget">
+              <option value="generic">常规</option>
+              <option value="openai">OpenAI</option>
+              <option value="grok">Grok</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+              <option value="all">全部目标</option>
+            </select>
+          </label>
+        </div>
+        <section class="gateway-strip">
+          <article>
+            <span>HTTP 网关</span>
+            <strong id="gatewayHttpBind">-</strong>
+          </article>
+          <article>
+            <span>SOCKS5 网关</span>
+            <strong id="gatewaySocks5Bind">-</strong>
+          </article>
+          <article>
+            <span>可用上游</span>
+            <strong id="gatewayUpstreams">0</strong>
+          </article>
+          <article>
+            <span>请求数</span>
+            <strong id="gatewayTotal">0</strong>
+          </article>
+          <article>
+            <span>成功率</span>
+            <strong id="gatewayRate">0%</strong>
+          </article>
+          <article class="gateway-recent">
+            <span>轮询上游</span>
+            <strong id="gatewayLastUpstream">-</strong>
+            <div id="gatewayRecent" class="recent-list"></div>
+          </article>
+        </section>
+      </section>
+
       <section class="panel proxies-panel">
         <div class="panel-head wrap">
           <div>
@@ -300,6 +358,7 @@
               <option value="failed">失败</option>
             </select>
             <select id="targetProfile">
+              <option value="all">全部目标</option>
               <option value="generic">常规</option>
               <option value="openai">OpenAI</option>
               <option value="grok">Grok</option>
@@ -334,29 +393,6 @@
             <button id="nextProxyPage" class="secondary" data-label="下一页">下一页</button>
           </div>
         </div>
-      </section>
-
-      <section class="gateway-strip">
-        <article>
-          <span>HTTP 网关</span>
-          <strong id="gatewayHttpBind">-</strong>
-        </article>
-        <article>
-          <span>SOCKS5 网关</span>
-          <strong id="gatewaySocks5Bind">-</strong>
-        </article>
-        <article>
-          <span>可用上游</span>
-          <strong id="gatewayUpstreams">0</strong>
-        </article>
-        <article>
-          <span>请求数</span>
-          <strong id="gatewayTotal">0</strong>
-        </article>
-        <article>
-          <span>成功率</span>
-          <strong id="gatewayRate">0%</strong>
-        </article>
       </section>
 
       <footer class="app-footer">

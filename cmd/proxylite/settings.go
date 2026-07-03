@@ -19,6 +19,7 @@ type appSettings struct {
 	AutoFetchCooldownMinutes int      `json:"auto_fetch_cooldown_minutes"`
 	CheckStatus              string   `json:"check_status"`
 	CheckTargetProfile       string   `json:"check_target_profile"`
+	CheckTargetProfiles      []string `json:"check_target_profiles"`
 	CheckLimit               int      `json:"check_limit"`
 	CheckConcurrent          int      `json:"check_concurrent"`
 	CheckRounds              int      `json:"check_rounds"`
@@ -32,6 +33,8 @@ type appSettings struct {
 	AutoFetchSourceIDs       []string `json:"auto_fetch_source_ids"`
 	AutoCheckEnabled         bool     `json:"auto_check_enabled"`
 	AutoCheckIntervalMinutes int      `json:"auto_check_interval_minutes"`
+	GatewayTargetProfile     string   `json:"gateway_target_profile"`
+	ExportTargetProfile      string   `json:"export_target_profile"`
 }
 
 type scheduler struct {
@@ -85,6 +88,7 @@ func defaultAppSettings() appSettings {
 		AutoFetchCooldownMinutes: 30,
 		CheckStatus:              "untested",
 		CheckTargetProfile:       "generic",
+		CheckTargetProfiles:      []string{"generic"},
 		CheckLimit:               500,
 		CheckConcurrent:          50,
 		CheckRounds:              1,
@@ -98,6 +102,8 @@ func defaultAppSettings() appSettings {
 		AutoFetchSourceIDs:       nil,
 		AutoCheckEnabled:         false,
 		AutoCheckIntervalMinutes: 120,
+		GatewayTargetProfile:     "generic",
+		ExportTargetProfile:      "generic",
 	}
 }
 
@@ -162,8 +168,15 @@ func settingsFromPayload(current appSettings, payload map[string]any) appSetting
 	if value, ok := payload["check_status"]; ok {
 		settings.CheckStatus = optionalString(value, settings.CheckStatus)
 	}
+	if value, ok := payload["check_target_profiles"]; ok {
+		settings.CheckTargetProfiles = anyToStringSlice(value)
+		settings.CheckTargetProfile = ""
+	}
 	if value, ok := payload["check_target_profile"]; ok {
 		settings.CheckTargetProfile = optionalString(value, settings.CheckTargetProfile)
+		if _, hasProfiles := payload["check_target_profiles"]; !hasProfiles {
+			settings.CheckTargetProfiles = anyToStringSlice(settings.CheckTargetProfile)
+		}
 	}
 	if value, ok := payload["check_limit"]; ok {
 		settings.CheckLimit = anyToInt(value)
@@ -204,6 +217,12 @@ func settingsFromPayload(current appSettings, payload map[string]any) appSetting
 	if value, ok := payload["auto_check_interval_minutes"]; ok {
 		settings.AutoCheckIntervalMinutes = anyToInt(value)
 	}
+	if value, ok := payload["gateway_target_profile"]; ok {
+		settings.GatewayTargetProfile = optionalString(value, settings.GatewayTargetProfile)
+	}
+	if value, ok := payload["export_target_profile"]; ok {
+		settings.ExportTargetProfile = optionalString(value, settings.ExportTargetProfile)
+	}
 	return normalizeAppSettings(settings)
 }
 
@@ -213,7 +232,12 @@ func normalizeAppSettings(settings appSettings) appSettings {
 	settings.AutoFetchUntestedMinimum = clampInt(settings.AutoFetchUntestedMinimum, 100, 1000000)
 	settings.AutoFetchCooldownMinutes = clampInt(settings.AutoFetchCooldownMinutes, 1, 1440)
 	settings.CheckStatus = normalizeCheckStatus(settings.CheckStatus)
-	settings.CheckTargetProfile = normalizeTargetProfile(settings.CheckTargetProfile)
+	checkProfiles := settings.CheckTargetProfiles
+	if len(checkProfiles) == 0 {
+		checkProfiles = anyToStringSlice(settings.CheckTargetProfile)
+	}
+	settings.CheckTargetProfiles = normalizeTargetProfiles(checkProfiles)
+	settings.CheckTargetProfile = settings.CheckTargetProfiles[0]
 	settings.CheckLimit = clampInt(settings.CheckLimit, 1, 100000)
 	settings.CheckConcurrent = clampInt(settings.CheckConcurrent, 1, 300)
 	settings.CheckRounds = clampInt(settings.CheckRounds, 1, 5)
@@ -223,6 +247,8 @@ func normalizeAppSettings(settings appSettings) appSettings {
 	settings.AutoFetchIntervalMinutes = clampInt(settings.AutoFetchIntervalMinutes, 5, 10080)
 	settings.AutoCheckIntervalMinutes = clampInt(settings.AutoCheckIntervalMinutes, 5, 10080)
 	settings.AutoFetchSourceIDs = validSourceIDs(settings.AutoFetchSourceIDs)
+	settings.GatewayTargetProfile = normalizeTargetProfileOrAll(settings.GatewayTargetProfile, "generic")
+	settings.ExportTargetProfile = normalizeTargetProfileOrAll(settings.ExportTargetProfile, "generic")
 	return settings
 }
 
@@ -379,6 +405,7 @@ func (sc *scheduler) tickCheck(settings appSettings, now time.Time) {
 	_, err := sc.srv.StartCheckJob(map[string]any{
 		"status":            settings.CheckStatus,
 		"target_profile":    settings.CheckTargetProfile,
+		"target_profiles":   settings.CheckTargetProfiles,
 		"limit":             settings.CheckLimit,
 		"concurrent":        settings.CheckConcurrent,
 		"rounds":            settings.CheckRounds,

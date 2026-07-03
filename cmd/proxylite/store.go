@@ -172,6 +172,39 @@ CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status);
 CREATE INDEX IF NOT EXISTS idx_proxies_target ON proxies(target_profile);
 CREATE INDEX IF NOT EXISTS idx_proxies_source ON proxies(source);
 CREATE INDEX IF NOT EXISTS idx_proxies_quality ON proxies(status, grade, latency_ms);
+CREATE TABLE IF NOT EXISTS proxy_checks (
+  proxy_id INTEGER NOT NULL,
+  target_profile TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'untested',
+  grade TEXT NOT NULL DEFAULT '',
+  latency_ms INTEGER,
+  exit_ip TEXT,
+  country TEXT,
+  ip_type TEXT,
+  asn_org TEXT,
+  success_rate REAL NOT NULL DEFAULT 0,
+  detected_protocol TEXT,
+  service_reachable INTEGER NOT NULL DEFAULT 0,
+  api_reachable INTEGER,
+  cloudflare_status TEXT,
+  recommended_use TEXT NOT NULL DEFAULT '',
+  last_error TEXT,
+  checked_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (proxy_id, target_profile),
+  FOREIGN KEY (proxy_id) REFERENCES proxies(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_proxy_checks_target_status ON proxy_checks(target_profile, status);
+INSERT OR IGNORE INTO proxy_checks (
+  proxy_id, target_profile, status, grade, latency_ms, exit_ip, country, ip_type, asn_org,
+  success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
+  recommended_use, last_error, checked_at, updated_at
+)
+SELECT id, target_profile, status, grade, latency_ms, exit_ip, country, ip_type, asn_org,
+       success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
+       recommended_use, last_error, last_checked_at, updated_at
+FROM proxies
+WHERE last_checked_at IS NOT NULL AND target_profile != '';
 `); err != nil {
 		return err
 	}
@@ -307,6 +340,10 @@ WHERE proxy_key = ?`,
 }
 
 func (s *store) ListProxies(filter proxyFilter) ([]proxyRecord, int, error) {
+	target := strings.ToLower(strings.TrimSpace(filter.TargetProfile))
+	if target != "" && target != "all" {
+		return s.listProxiesForTarget(filter, normalizeTargetProfile(target))
+	}
 	where, args := filterWhere(filter)
 	totalQuery := "SELECT COUNT(*) FROM proxies" + where
 	var total int
@@ -328,6 +365,57 @@ ORDER BY
 LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := []proxyRecord{}
+	for rows.Next() {
+		item, err := scanProxy(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		items = append(items, item)
+	}
+	return items, total, rows.Err()
+}
+
+func (s *store) listProxiesForTarget(filter proxyFilter, targetProfile string) ([]proxyRecord, int, error) {
+	where, args := targetFilterWhere(filter)
+	countArgs := append([]any{targetProfile}, args...)
+	totalQuery := `
+SELECT COUNT(*)
+FROM proxies p
+LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?` + where
+	var total int
+	if err := s.db.QueryRow(totalQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	limit := clampInt(filter.Limit, 1, 100000)
+	offset := clampInt(filter.Offset, 0, 10000000)
+	query := `
+SELECT p.id, p.proxy_key, p.ip, p.port, p.protocol, p.username, p.password, p.source,
+       COALESCE(c.status, 'untested') AS status,
+       COALESCE(c.grade, '') AS grade,
+       c.latency_ms, c.exit_ip, c.country, c.ip_type, c.asn_org,
+       COALESCE(c.success_rate, 0) AS success_rate,
+       COALESCE(c.target_profile, ?) AS target_profile,
+       c.detected_protocol,
+       COALESCE(c.service_reachable, 0) AS service_reachable,
+       c.api_reachable, c.cloudflare_status,
+       COALESCE(c.recommended_use, '') AS recommended_use,
+       c.last_error, p.failure_count, p.created_at, COALESCE(c.updated_at, p.updated_at) AS updated_at, c.checked_at
+FROM proxies p
+LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?` + where + `
+ORDER BY
+  CASE COALESCE(c.status, 'untested') WHEN 'available' THEN 0 WHEN 'untested' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END,
+  CASE COALESCE(c.grade, '') WHEN 'A' THEN 0 WHEN 'B' THEN 1 WHEN 'C' THEN 2 ELSE 3 END,
+  COALESCE(c.latency_ms, 999999),
+  COALESCE(c.updated_at, p.updated_at) DESC
+LIMIT ? OFFSET ?`
+	queryArgs := append([]any{targetProfile, targetProfile}, args...)
+	queryArgs = append(queryArgs, limit, offset)
+	rows, err := s.db.Query(query, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -365,6 +453,27 @@ func filterWhere(filter proxyFilter) (string, []any) {
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
+func targetFilterWhere(filter proxyFilter) (string, []any) {
+	clauses := []string{"p.enabled = 1"}
+	args := []any{}
+	status := strings.ToLower(strings.TrimSpace(filter.Status))
+	if status != "" && status != "all" {
+		if status == "checked" {
+			clauses = append(clauses, "COALESCE(c.status, 'untested') != 'untested'")
+		} else {
+			clauses = append(clauses, "COALESCE(c.status, 'untested') = ?")
+			args = append(args, status)
+		}
+	}
+	query := strings.TrimSpace(filter.Query)
+	if query != "" {
+		clauses = append(clauses, "(p.proxy_key LIKE ? OR p.source LIKE ? OR p.ip LIKE ?)")
+		like := "%" + query + "%"
+		args = append(args, like, like, like)
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
 func (s *store) DeleteProxiesByStatus(status string) (map[string]any, error) {
 	status = strings.ToLower(strings.TrimSpace(status))
 	allowed := map[string]bool{"available": true, "failed": true, "untested": true, "checked": true, "all": true}
@@ -392,26 +501,28 @@ func (s *store) ListCheckCandidates(status string, limit int, targetProfile stri
 	if status == "" {
 		status = "untested"
 	}
-	where := "WHERE enabled = 1"
-	args := []any{}
+	targetProfile = normalizeTargetProfile(targetProfile)
+	where := "WHERE p.enabled = 1"
+	args := []any{targetProfile}
 	switch status {
 	case "all":
 	case "checked":
-		where += " AND status != 'untested'"
+		where += " AND COALESCE(c.status, 'untested') != 'untested'"
 	case "available", "failed", "untested":
-		where += " AND status = ?"
+		where += " AND COALESCE(c.status, 'untested') = ?"
 		args = append(args, status)
 	default:
 		return nil, errors.New("status must be available, failed, untested, checked, or all")
 	}
 	query := `
-SELECT id, proxy_key, ip, port, protocol, username, password, source
-FROM proxies ` + where + `
+SELECT p.id, p.proxy_key, p.ip, p.port, p.protocol, p.username, p.password, p.source
+FROM proxies p
+LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ? ` + where + `
 ORDER BY
-  CASE status WHEN 'untested' THEN 0 WHEN 'failed' THEN 1 WHEN 'available' THEN 2 ELSE 3 END,
-  CASE WHEN status = 'untested' AND last_checked_at IS NOT NULL THEN 0 ELSE 1 END,
-  COALESCE(last_checked_at, created_at) ASC,
-  id ASC
+  CASE COALESCE(c.status, 'untested') WHEN 'untested' THEN 0 WHEN 'failed' THEN 1 WHEN 'available' THEN 2 ELSE 3 END,
+  CASE WHEN COALESCE(c.status, 'untested') = 'untested' AND c.checked_at IS NOT NULL THEN 0 ELSE 1 END,
+  COALESCE(c.checked_at, p.created_at) ASC,
+  p.id ASC
 LIMIT ?`
 	args = append(args, clampInt(limit, 1, 100000))
 	rows, err := s.db.Query(query, args...)
@@ -438,6 +549,7 @@ func (s *store) SaveCheckResult(result CheckResult) error {
 	if status == "" {
 		status = "failed"
 	}
+	targetProfile := normalizeTargetProfile(result.TargetProfile)
 	failureExpr := "failure_count"
 	if status == "failed" {
 		failureExpr = "failure_count + 1"
@@ -448,7 +560,17 @@ func (s *store) SaveCheckResult(result CheckResult) error {
 	if result.APIReachable != nil {
 		apiReachable = boolToInt(*result.APIReachable)
 	}
-	_, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	updateResult, err := tx.Exec(`
 UPDATE proxies
 SET status = ?,
     grade = ?,
@@ -477,7 +599,7 @@ WHERE id = ?`,
 		nullableString(result.IPType),
 		nullableString(result.ASNOrg),
 		result.SuccessRate,
-		firstNonEmpty(result.TargetProfile, "generic"),
+		targetProfile,
 		nullableString(result.DetectedProtocol),
 		boolToInt(result.ServiceReachable),
 		apiReachable,
@@ -486,7 +608,61 @@ WHERE id = ?`,
 		nullableString(result.LastError),
 		result.ProxyID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if rows, _ := updateResult.RowsAffected(); rows == 0 {
+		return sql.ErrNoRows
+	}
+	_, err = tx.Exec(`
+INSERT INTO proxy_checks (
+  proxy_id, target_profile, status, grade, latency_ms, exit_ip, country, ip_type, asn_org,
+  success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
+  recommended_use, last_error, checked_at, updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
+  status = excluded.status,
+  grade = excluded.grade,
+  latency_ms = excluded.latency_ms,
+  exit_ip = excluded.exit_ip,
+  country = excluded.country,
+  ip_type = excluded.ip_type,
+  asn_org = excluded.asn_org,
+  success_rate = excluded.success_rate,
+  detected_protocol = excluded.detected_protocol,
+  service_reachable = excluded.service_reachable,
+  api_reachable = excluded.api_reachable,
+  cloudflare_status = excluded.cloudflare_status,
+  recommended_use = excluded.recommended_use,
+  last_error = excluded.last_error,
+  checked_at = excluded.checked_at,
+  updated_at = excluded.updated_at`,
+		result.ProxyID,
+		targetProfile,
+		status,
+		result.Grade,
+		nullableInt(result.LatencyMS),
+		nullableString(result.ExitIP),
+		nullableString(result.Country),
+		nullableString(result.IPType),
+		nullableString(result.ASNOrg),
+		result.SuccessRate,
+		nullableString(result.DetectedProtocol),
+		boolToInt(result.ServiceReachable),
+		apiReachable,
+		nullableString(result.CloudflareStatus),
+		result.RecommendedUse,
+		nullableString(result.LastError),
+	)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (s *store) DeleteProxyByID(id int) error {
@@ -504,6 +680,17 @@ func (s *store) DeleteFailedProxies() (int64, error) {
 
 func (s *store) RequeueExpiredAvailable(ttlHours int) (int64, error) {
 	ttlHours = clampInt(ttlHours, 1, 8760)
+	targetResult, err := s.db.Exec(`
+UPDATE proxy_checks
+SET status = 'untested',
+    updated_at = datetime('now')
+WHERE status = 'available'
+  AND COALESCE(checked_at, updated_at) <= datetime('now', ?)`,
+		fmt.Sprintf("-%d hours", ttlHours),
+	)
+	if err != nil {
+		return 0, err
+	}
 	result, err := s.db.Exec(`
 UPDATE proxies
 SET status = 'untested',
@@ -516,7 +703,9 @@ WHERE enabled = 1
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	proxyRows, _ := result.RowsAffected()
+	targetRows, _ := targetResult.RowsAffected()
+	return proxyRows + targetRows, nil
 }
 
 func (s *store) CountProxiesByStatus(status string) (int, error) {
@@ -527,6 +716,10 @@ func (s *store) CountProxiesByStatus(status string) (int, error) {
 }
 
 func (s *store) ExportAvailable(targetProfile string, limit int) ([]proxyRecord, error) {
+	profiles := normalizeTargetProfilesOrNil(targetProfile)
+	if len(profiles) > 0 {
+		return s.ExportAvailableForProfiles(profiles, limit)
+	}
 	filter := proxyFilter{Status: "available", TargetProfile: targetProfile, Limit: 100000}
 	if limit > 0 {
 		filter.Limit = limit
@@ -535,14 +728,40 @@ func (s *store) ExportAvailable(targetProfile string, limit int) ([]proxyRecord,
 	return items, err
 }
 
+func (s *store) ExportAvailableForProfiles(targetProfiles []string, limit int) ([]proxyRecord, error) {
+	targetProfiles = normalizeTargetProfiles(targetProfiles)
+	maxItems := 100000
+	if limit > 0 {
+		maxItems = clampInt(limit, 1, 100000)
+	}
+	items := []proxyRecord{}
+	for _, profile := range targetProfiles {
+		remaining := maxItems - len(items)
+		if remaining <= 0 {
+			break
+		}
+		batch, _, err := s.ListProxies(proxyFilter{Status: "available", TargetProfile: profile, Limit: remaining})
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, batch...)
+	}
+	return items, nil
+}
+
 func (s *store) AvailableProxyURLs(limit int, targetProfile string) ([]string, error) {
 	items, err := s.ExportAvailable(targetProfile, limit)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]string, 0, len(items))
+	seen := map[string]bool{}
 	for _, item := range items {
-		out = append(out, item.ProxyURL())
+		proxyURL := item.ProxyURL()
+		if !seen[proxyURL] {
+			seen[proxyURL] = true
+			out = append(out, proxyURL)
+		}
 	}
 	return out, nil
 }

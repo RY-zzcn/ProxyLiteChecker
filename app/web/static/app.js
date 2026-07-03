@@ -5,12 +5,23 @@ const state = {
   scheduler: null,
   activeJob: null,
   pollTimer: null,
+  gatewayTimer: null,
   sourceSelected: 0,
   proxies: {
     offset: 0,
     limit: 50,
     total: 0,
   },
+};
+
+const TARGET_OPTIONS = ["generic", "openai", "grok", "gemini", "claude"];
+const TARGET_LABELS = {
+  generic: "常规",
+  openai: "OpenAI",
+  grok: "Grok",
+  gemini: "Gemini",
+  claude: "Claude",
+  all: "全部目标",
 };
 
 const el = (id) => document.getElementById(id);
@@ -37,6 +48,7 @@ async function api(path, options = {}) {
 }
 
 function showLogin() {
+  stopGatewayPolling();
   el("loginView").hidden = false;
   el("appView").hidden = true;
 }
@@ -65,6 +77,45 @@ function statusTag(status) {
   return `<span class="tag ${escapeHtml(status)}">${escapeHtml(text)}</span>`;
 }
 
+function normalizeTargetValues(values, allowAll = false) {
+  const list = Array.isArray(values) ? values : String(values || "").split(",");
+  const out = [];
+  for (const value of list) {
+    const target = String(value || "").trim().toLowerCase();
+    if (allowAll && target === "all") {
+      return ["all"];
+    }
+    if (TARGET_OPTIONS.includes(target) && !out.includes(target)) {
+      out.push(target);
+    }
+  }
+  return out.length ? out : ["generic"];
+}
+
+function getTargetSelections(containerId) {
+  const selected = [...document.querySelectorAll(`#${containerId} input:checked`)].map((input) => input.value);
+  return normalizeTargetValues(selected);
+}
+
+function setTargetSelections(containerId, values) {
+  const selected = new Set(normalizeTargetValues(values));
+  document.querySelectorAll(`#${containerId} input`).forEach((input) => {
+    input.checked = selected.has(input.value);
+  });
+}
+
+function ensureTargetSelection(containerId) {
+  const hasChecked = [...document.querySelectorAll(`#${containerId} input`)].some((input) => input.checked);
+  if (!hasChecked) {
+    const first = document.querySelector(`#${containerId} input[value="generic"]`);
+    if (first) first.checked = true;
+  }
+}
+
+function targetLabel(value) {
+  return TARGET_LABELS[value] || value || "常规";
+}
+
 function defaultSettings() {
   return {
     proxy_page_size: 50,
@@ -74,6 +125,7 @@ function defaultSettings() {
     auto_fetch_cooldown_minutes: 30,
     check_status: "untested",
     check_target_profile: "generic",
+    check_target_profiles: ["generic"],
     check_limit: 500,
     check_concurrent: 50,
     check_rounds: 1,
@@ -87,6 +139,8 @@ function defaultSettings() {
     auto_fetch_source_ids: [],
     auto_check_enabled: false,
     auto_check_interval_minutes: 120,
+    gateway_target_profile: "generic",
+    export_target_profile: "generic",
   };
 }
 
@@ -164,6 +218,7 @@ async function bootstrap() {
   renderGateway(payload.gateway || {});
   renderJobs(payload.active_jobs || []);
   await loadProxies();
+  startGatewayPolling();
 }
 
 function renderStats(stats) {
@@ -210,15 +265,19 @@ function renderSettings(settings, scheduler) {
   el("availableTtlHours").value = state.settings.available_ttl_hours;
   el("proxyPageSize").value = String(state.settings.proxy_page_size);
   el("settingsCheckStatus").value = state.settings.check_status;
-  el("settingsCheckTarget").value = state.settings.check_target_profile;
+  const checkTargets = state.settings.check_target_profiles || [state.settings.check_target_profile || "generic"];
+  setTargetSelections("settingsCheckTargets", checkTargets);
   el("settingsCheckLimit").value = state.settings.check_limit;
   el("quickCheckStatus").value = state.settings.check_status;
-  el("quickCheckTarget").value = state.settings.check_target_profile;
+  setTargetSelections("quickCheckTargets", checkTargets);
   el("quickCheckLimit").value = state.settings.check_limit;
   el("settingsCheckConcurrent").value = state.settings.check_concurrent;
   el("settingsCheckRounds").value = state.settings.check_rounds;
   el("settingsCheckTimeout").value = state.settings.check_request_timeout;
   el("settingsCheckHardTimeout").value = state.settings.check_hard_timeout;
+  el("gatewayTarget").value = normalizeTargetValues(state.settings.gateway_target_profile, true)[0];
+  el("exportTarget").value = normalizeTargetValues(state.settings.export_target_profile, true)[0];
+  updateExportLinks();
   renderSchedulerText(state.scheduler);
 }
 
@@ -255,13 +314,24 @@ function renderGateway(gateway) {
   const httpBind = gateway.enabled ? displayGatewayBind(gateway, "http") : "未启用";
   const socks5Bind = gateway.enabled && gateway.socks5_enabled ? displayGatewayBind(gateway, "socks5") : "未启用";
   const upstreams = gateway.upstreams || 0;
+  const target = gateway.target_profile || state.settings?.gateway_target_profile || "generic";
   el("gatewayHttpBind").textContent = httpBind;
   el("gatewaySocks5Bind").textContent = socks5Bind;
   el("gatewayUpstreams").textContent = upstreams;
   el("gatewayTotal").textContent = gateway.total_requests || 0;
   el("gatewayRate").textContent = `${Math.round((gateway.success_rate || 0) * 100)}%`;
+  el("gatewayLastUpstream").textContent = gateway.last_upstream || "-";
+  el("gatewaySummary").textContent = gateway.enabled
+    ? `${targetLabel(target)} · ${upstreams} 个可用上游 · 最近请求 ${gateway.total_requests || 0}`
+    : "网关未启用";
+  el("gatewayRecent").innerHTML =
+    (gateway.recent_upstreams || [])
+      .slice()
+      .reverse()
+      .map((item) => `<span title="${escapeHtml(item)}">${escapeHtml(item)}</span>`)
+      .join("") || `<span>等待网关请求</span>`;
   const pill = el("gatewayPill");
-  pill.textContent = gateway.enabled ? `HTTP ${httpBind} · SOCKS5 ${socks5Bind} · ${upstreams} 上游` : "网关未启用";
+  pill.textContent = gateway.enabled ? `${targetLabel(target)} · HTTP ${httpBind} · SOCKS5 ${socks5Bind} · ${upstreams} 上游` : "网关未启用";
   pill.classList.toggle("offline", !gateway.enabled);
 }
 
@@ -409,12 +479,14 @@ async function importProxies(event) {
 async function runCheck(event) {
   const checkTimeout = Number(el("settingsCheckTimeout").value || state.settings?.check_request_timeout || 6);
   const hardTimeout = Number(el("settingsCheckHardTimeout").value || state.settings?.check_hard_timeout || checkTimeout * 10);
+  const targetProfiles = getTargetSelections("quickCheckTargets");
   await withButton(event.currentTarget, "检测中", async () => {
     const payload = await api("/api/checks/run-job", {
       method: "POST",
       body: JSON.stringify({
         status: el("quickCheckStatus").value,
-        target_profile: el("quickCheckTarget").value,
+        target_profiles: targetProfiles,
+        target_profile: targetProfiles[0],
         limit: Number(el("quickCheckLimit").value || 500),
         concurrent: Number(el("settingsCheckConcurrent").value || 50),
         rounds: Number(el("settingsCheckRounds").value || 1),
@@ -453,11 +525,29 @@ function startPolling() {
   }, 1200);
 }
 
+function startGatewayPolling() {
+  if (state.gatewayTimer) return;
+  state.gatewayTimer = setInterval(async () => {
+    try {
+      await loadGateway();
+    } catch {
+      // Avoid repeating toast noise when the session expires or the service restarts.
+    }
+  }, 3000);
+}
+
+function stopGatewayPolling() {
+  if (!state.gatewayTimer) return;
+  clearInterval(state.gatewayTimer);
+  state.gatewayTimer = null;
+}
+
 async function saveSettings(event) {
   const selectedSourceIDs = [...document.querySelectorAll(".source-check:checked")].map((input) => input.value);
   const allSourcesSelected = selectedSourceIDs.length === state.sources.length;
   const checkTimeout = Number(el("settingsCheckTimeout").value || 6);
   const hardTimeout = Number(el("settingsCheckHardTimeout").value || checkTimeout * 10);
+  const checkTargets = getTargetSelections("settingsCheckTargets");
   await withButton(event.currentTarget, "保存中", async () => {
     const payload = await api("/api/settings", {
       method: "POST",
@@ -468,7 +558,8 @@ async function saveSettings(event) {
         auto_fetch_untested_minimum: Number(el("autoFetchUntestedMinimum").value || 5000),
         auto_fetch_cooldown_minutes: Number(el("autoFetchCooldown").value || 30),
         check_status: el("settingsCheckStatus").value,
-        check_target_profile: el("settingsCheckTarget").value,
+        check_target_profile: checkTargets[0],
+        check_target_profiles: checkTargets,
         check_limit: Number(el("settingsCheckLimit").value || 500),
         check_concurrent: Number(el("settingsCheckConcurrent").value || 50),
         check_rounds: Number(el("settingsCheckRounds").value || 1),
@@ -482,6 +573,8 @@ async function saveSettings(event) {
         auto_fetch_source_ids: allSourcesSelected ? [] : selectedSourceIDs,
         auto_check_enabled: el("autoCheckEnabled").checked,
         auto_check_interval_minutes: Number(el("autoCheckInterval").value || 120),
+        gateway_target_profile: el("gatewayTarget").value,
+        export_target_profile: el("exportTarget").value,
       }),
     });
     renderSettings(payload.settings, payload.scheduler);
@@ -490,6 +583,35 @@ async function saveSettings(event) {
     toast("设置已保存", "success");
     await loadProxies();
   });
+}
+
+async function savePartialSettings(partial) {
+  const payload = await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify(partial),
+  });
+  renderSettings(payload.settings, payload.scheduler);
+  state.proxies.limit = Number(payload.settings.proxy_page_size || 50);
+  return payload;
+}
+
+async function saveGatewayTarget() {
+  try {
+    await savePartialSettings({ gateway_target_profile: el("gatewayTarget").value });
+    await loadGateway();
+    toast("网关目标已保存", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function saveExportTarget() {
+  updateExportLinks();
+  try {
+    await savePartialSettings({ export_target_profile: el("exportTarget").value });
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 async function cancelJob(event) {
@@ -516,6 +638,22 @@ async function refreshAll() {
   await loadActiveJobs();
   await loadSettings();
   await loadProxies();
+}
+
+function updateExportLinks() {
+  const target = normalizeTargetValues(el("exportTarget")?.value || "generic", true)[0];
+  const params = new URLSearchParams({ target_profile: target });
+  el("exportTxtLink").href = `/api/export/proxies.txt?${params}`;
+  el("exportJsonLink").href = `/api/export/proxies.json?${params}`;
+}
+
+function bindTargetSync(sourceId, targetId) {
+  document.querySelectorAll(`#${sourceId} input`).forEach((input) => {
+    input.addEventListener("change", () => {
+      ensureTargetSelection(sourceId);
+      setTargetSelections(targetId, getTargetSelections(sourceId));
+    });
+  });
 }
 
 function bindEvents() {
@@ -553,21 +691,19 @@ function bindEvents() {
   el("quickCheckStatus").addEventListener("change", () => {
     el("settingsCheckStatus").value = el("quickCheckStatus").value;
   });
-  el("quickCheckTarget").addEventListener("change", () => {
-    el("settingsCheckTarget").value = el("quickCheckTarget").value;
-  });
+  bindTargetSync("quickCheckTargets", "settingsCheckTargets");
   el("quickCheckLimit").addEventListener("input", () => {
     el("settingsCheckLimit").value = el("quickCheckLimit").value;
   });
   el("settingsCheckStatus").addEventListener("change", () => {
     el("quickCheckStatus").value = el("settingsCheckStatus").value;
   });
-  el("settingsCheckTarget").addEventListener("change", () => {
-    el("quickCheckTarget").value = el("settingsCheckTarget").value;
-  });
+  bindTargetSync("settingsCheckTargets", "quickCheckTargets");
   el("settingsCheckLimit").addEventListener("input", () => {
     el("quickCheckLimit").value = el("settingsCheckLimit").value;
   });
+  el("gatewayTarget").addEventListener("change", saveGatewayTarget);
+  el("exportTarget").addEventListener("change", saveExportTarget);
   el("proxyPageSize").addEventListener("change", () => {
     state.proxies.limit = Number(el("proxyPageSize").value || 50);
     resetProxyPage();

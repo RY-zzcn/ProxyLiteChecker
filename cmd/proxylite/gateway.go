@@ -28,12 +28,13 @@ type gatewayConfig struct {
 }
 
 type gatewayServer struct {
-	store          *store
-	cfg            gatewayConfig
-	http           *http.Server
-	socks5Listener net.Listener
-	mu             sync.Mutex
-	index          int
+	store           *store
+	cfg             gatewayConfig
+	http            *http.Server
+	socks5Listener  net.Listener
+	mu              sync.Mutex
+	index           int
+	recentUpstreams []string
 
 	totalRequests   int64
 	successRequests int64
@@ -94,8 +95,9 @@ func (g *gatewayServer) Status() map[string]any {
 		successRate = float64(success) / float64(total)
 	}
 	upstreamCount := 0
+	targetProfile := g.targetProfile()
 	if g.store != nil {
-		items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, "")
+		items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, targetProfile)
 		if err == nil {
 			upstreamCount = len(items)
 		}
@@ -109,12 +111,14 @@ func (g *gatewayServer) Status() map[string]any {
 		"socks5_bind":      fmt.Sprintf("%s:%d", g.cfg.Socks5Host, g.cfg.Socks5Port),
 		"socks5_host":      g.cfg.Socks5Host,
 		"socks5_port":      g.cfg.Socks5Port,
+		"target_profile":   targetProfile,
 		"upstreams":        upstreamCount,
 		"total_requests":   total,
 		"success_requests": success,
 		"failed_requests":  failed,
 		"success_rate":     successRate,
 		"last_upstream":    valueString(g.lastUpstream.Load()),
+		"recent_upstreams": g.recentSnapshot(),
 		"last_error":       valueString(g.lastError.Load()),
 		"started_at":       g.startedAt,
 	}
@@ -202,7 +206,7 @@ func (g *gatewayServer) selectUpstream() (string, error) {
 	if g.store == nil {
 		return "", fmt.Errorf("store unavailable")
 	}
-	items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, "")
+	items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, g.targetProfile())
 	if err != nil {
 		return "", err
 	}
@@ -213,6 +217,7 @@ func (g *gatewayServer) selectUpstream() (string, error) {
 	defer g.mu.Unlock()
 	item := items[g.index%len(items)]
 	g.index++
+	g.rememberUpstreamLocked(item)
 	return item, nil
 }
 
@@ -230,6 +235,36 @@ func (g *gatewayServer) recordFailure(upstream string, err error) {
 	if err != nil {
 		g.lastError.Store(err.Error())
 	}
+}
+
+func (g *gatewayServer) targetProfile() string {
+	if g.store == nil {
+		return "generic"
+	}
+	settings, err := g.store.AppSettings()
+	if err != nil {
+		return "generic"
+	}
+	return normalizeTargetProfileOrAll(settings.GatewayTargetProfile, "generic")
+}
+
+func (g *gatewayServer) rememberUpstreamLocked(upstream string) {
+	masked := maskProxyURL(upstream)
+	g.lastUpstream.Store(masked)
+	if len(g.recentUpstreams) == 0 || g.recentUpstreams[len(g.recentUpstreams)-1] != masked {
+		g.recentUpstreams = append(g.recentUpstreams, masked)
+	}
+	if len(g.recentUpstreams) > 8 {
+		g.recentUpstreams = append([]string{}, g.recentUpstreams[len(g.recentUpstreams)-8:]...)
+	}
+}
+
+func (g *gatewayServer) recentSnapshot() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]string, len(g.recentUpstreams))
+	copy(out, g.recentUpstreams)
+	return out
 }
 
 func (g *gatewayServer) handleSocks5Conn(client net.Conn) {
