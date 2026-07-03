@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ProxyLiteChecker</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main id="loginView" class="login-view" hidden>
+      <form id="loginForm" class="login-panel">
+        <div>
+          <h1>ProxyLiteChecker</h1>
+          <p>单机代理检测与本机代理网关</p>
+        </div>
+        <label>
+          用户名
+          <input id="username" autocomplete="username" value="admin" />
+        </label>
+        <label>
+          密码
+          <input id="password" type="password" autocomplete="current-password" />
+        </label>
+        <button type="submit">登录</button>
+        <div id="loginError" class="error-text"></div>
+      </form>
+    </main>
+
+    <main id="appView" class="app-shell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">P</span>
+          <div>
+            <strong>ProxyLiteChecker</strong>
+            <small id="versionText">v0.1.0</small>
+          </div>
+        </div>
+        <nav>
+          <a href="#dashboard" class="active">概览</a>
+          <a href="#sources">代理源</a>
+          <a href="#proxies">代理仓库</a>
+          <a href="#gateway">本机网关</a>
+        </nav>
+        <button id="logoutBtn" class="secondary full">退出登录</button>
+      </aside>
+
+      <section class="content">
+        <header class="topbar">
+          <div>
+            <h1>本机代理池</h1>
+            <p>当前机器视角下的拉取、检测、导出和网关状态</p>
+          </div>
+          <button id="refreshBtn" class="secondary">刷新</button>
+        </header>
+
+        <section id="dashboard" class="section">
+          <div class="metric-grid">
+            <article class="metric"><span>总数</span><strong id="statTotal">0</strong></article>
+            <article class="metric"><span>可用</span><strong id="statAvailable">0</strong></article>
+            <article class="metric"><span>待检</span><strong id="statUntested">0</strong></article>
+            <article class="metric"><span>失败</span><strong id="statFailed">0</strong></article>
+          </div>
+
+          <div class="panel task-panel">
+            <div class="panel-head">
+              <div>
+                <h2>实时任务</h2>
+                <p id="taskSubtitle">暂无运行任务</p>
+              </div>
+              <button id="cancelJobBtn" class="secondary" disabled>停止任务</button>
+            </div>
+            <div class="progress">
+              <span id="progressBar"></span>
+            </div>
+            <div id="jobMessage" class="job-message">等待操作</div>
+          </div>
+        </section>
+
+        <section id="sources" class="section grid-2">
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>代理源</h2>
+                <p>选择代理源后拉取并去重导入</p>
+              </div>
+              <button id="fetchSourcesBtn">拉取选中</button>
+            </div>
+            <div class="control-row">
+              <button id="selectAllSources" class="secondary">全选</button>
+              <button id="clearSources" class="secondary">清空</button>
+              <label class="compact-label">
+                单源上限
+                <input id="sourceLimit" type="number" min="0" max="50000" value="0" />
+              </label>
+            </div>
+            <div id="sourcesList" class="source-list"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>手动导入</h2>
+                <p>支持 http、https、socks4、socks5 和无前缀代理</p>
+              </div>
+              <button id="importBtn">导入</button>
+            </div>
+            <textarea id="importText" spellcheck="false" placeholder="http://1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;9.9.9.9:3128"></textarea>
+            <div id="importResult" class="muted"></div>
+          </div>
+        </section>
+
+        <section id="proxies" class="section panel">
+          <div class="panel-head wrap">
+            <div>
+              <h2>代理仓库</h2>
+              <p>本地 SQLite 中的代理库存和最新检测结果</p>
+            </div>
+            <div class="toolbar">
+              <select id="proxyStatus">
+                <option value="all">全部</option>
+                <option value="available">可用</option>
+                <option value="untested">待检</option>
+                <option value="failed">失败</option>
+              </select>
+              <select id="targetProfile">
+                <option value="generic">常规</option>
+                <option value="openai">OpenAI</option>
+                <option value="grok">Grok</option>
+                <option value="gemini">Gemini</option>
+                <option value="claude">Claude</option>
+              </select>
+              <input id="proxySearch" placeholder="搜索 IP / 来源" />
+              <button id="runCheckBtn">本机检测</button>
+              <button id="deleteFailedBtn" class="danger secondary">清理失败</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>代理</th>
+                  <th>状态</th>
+                  <th>等级</th>
+                  <th>延迟</th>
+                  <th>出口</th>
+                  <th>用途</th>
+                  <th>来源</th>
+                  <th>更新时间</th>
+                </tr>
+              </thead>
+              <tbody id="proxyRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="gateway" class="section grid-2">
+          <div class="panel">
+            <h2>本机 HTTP 网关</h2>
+            <div class="info-grid">
+              <span>地址</span><strong id="gatewayBind">-</strong>
+              <span>可用上游</span><strong id="gatewayUpstreams">0</strong>
+              <span>请求数</span><strong id="gatewayTotal">0</strong>
+              <span>成功率</span><strong id="gatewayRate">0%</strong>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>导出链接</h2>
+            <div class="export-links">
+              <a href="/api/export/proxies.txt" target="_blank">TXT 导出</a>
+              <a href="/api/export/proxies.json" target="_blank">JSON 导出</a>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

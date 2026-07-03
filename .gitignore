@@ -1,0 +1,9 @@
+bin/
+data/
+logs/
+.env
+*.local
+*.log
+node_modules/
+dist/
+coverage/
