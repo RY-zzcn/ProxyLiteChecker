@@ -155,6 +155,8 @@ function defaultSettings() {
     delete_failed_on_check: false,
     recheck_expired_enabled: false,
     available_ttl_hours: 24,
+    delete_expired_untested: false,
+    untested_ttl_hours: 72,
     auto_fetch_enabled: false,
     auto_fetch_interval_minutes: 360,
     auto_fetch_source_ids: [],
@@ -283,6 +285,8 @@ function renderSettings(settings, scheduler) {
   el("deleteFailedOnCheck").checked = Boolean(state.settings.delete_failed_on_check);
   el("recheckExpiredEnabled").checked = Boolean(state.settings.recheck_expired_enabled);
   el("availableTtlHours").value = state.settings.available_ttl_hours;
+  el("deleteExpiredUntestedEnabled").checked = Boolean(state.settings.delete_expired_untested);
+  el("untestedTtlHours").value = state.settings.untested_ttl_hours;
   el("proxyPageSize").value = String(state.settings.proxy_page_size);
   el("settingsCheckStatus").value = state.settings.check_status;
   const checkTargets = state.settings.check_target_profiles || [state.settings.check_target_profile || "generic"];
@@ -311,8 +315,10 @@ function renderSchedulerText(scheduler) {
   if (scheduler?.check?.enabled) {
     parts.push(`检测 ${displayNextRun(scheduler.check.next_run_at)}`);
   }
-  if (scheduler?.maintenance?.expired_requeued || scheduler?.maintenance?.failed_deleted) {
-    parts.push(`维护 删除 ${scheduler.maintenance.failed_deleted || 0} / 回检 ${scheduler.maintenance.expired_requeued || 0}`);
+  if (scheduler?.maintenance?.expired_requeued || scheduler?.maintenance?.failed_deleted || scheduler?.maintenance?.untested_deleted) {
+    parts.push(
+      `维护 失败 ${scheduler.maintenance.failed_deleted || 0} / 回检 ${scheduler.maintenance.expired_requeued || 0} / 待检 ${scheduler.maintenance.untested_deleted || 0}`,
+    );
   }
   el("schedulerText").textContent = parts.length ? parts.join(" · ") : scheduler?.message || "自动任务未启用";
 }
@@ -619,6 +625,8 @@ async function saveSettings(event) {
         delete_failed_on_check: el("deleteFailedOnCheck").checked,
         recheck_expired_enabled: el("recheckExpiredEnabled").checked,
         available_ttl_hours: Number(el("availableTtlHours").value || 24),
+        delete_expired_untested: el("deleteExpiredUntestedEnabled").checked,
+        untested_ttl_hours: Number(el("untestedTtlHours").value || 72),
         auto_fetch_enabled: el("autoFetchEnabled").checked,
         auto_fetch_interval_minutes: Number(el("autoFetchInterval").value || 360),
         auto_fetch_source_ids: allSourcesSelected ? [] : selectedSourceIDs,

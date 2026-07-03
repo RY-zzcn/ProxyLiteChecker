@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.13 - 2026-07-03
+
+- Keep quick action buttons from turning blue on hover and align source fetching with the local-check action style.
+- Add automatic stale-untested proxy deletion with a configurable TTL in hours.
+- Add tests covering proxy source import deduplication and stale untested cleanup.
+
 ## 0.1.12 - 2026-07-03
 
 - Align the manual import panel height with the proxy source panel.

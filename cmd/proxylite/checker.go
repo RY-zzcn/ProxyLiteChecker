@@ -94,7 +94,7 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := s.applyProxyMaintenance(settings); err != nil {
+	if _, _, _, err := s.applyProxyMaintenance(settings); err != nil {
 		return nil, err
 	}
 	fallbackProfiles := settings.CheckTargetProfiles

@@ -678,6 +678,21 @@ func (s *store) DeleteFailedProxies() (int64, error) {
 	return result.RowsAffected()
 }
 
+func (s *store) DeleteExpiredUntested(ttlHours int) (int64, error) {
+	ttlHours = clampInt(ttlHours, 1, 8760)
+	result, err := s.db.Exec(`
+DELETE FROM proxies
+WHERE enabled = 1
+  AND status = 'untested'
+  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', ?)`,
+		fmt.Sprintf("-%d hours", ttlHours),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *store) RequeueExpiredAvailable(ttlHours int) (int64, error) {
 	ttlHours = clampInt(ttlHours, 1, 8760)
 	targetResult, err := s.db.Exec(`

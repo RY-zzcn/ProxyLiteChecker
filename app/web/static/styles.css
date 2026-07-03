@@ -381,6 +381,16 @@ textarea {
   box-shadow: none;
 }
 
+.action-button:hover {
+  background: #f2f6fa;
+}
+
+.action-button.accent:hover {
+  color: #153c39;
+  background: #e7f3f1;
+  border-color: #b7ddd7;
+}
+
 .action-button.accent strong {
   color: #0f665f;
 }
@@ -647,7 +657,7 @@ textarea {
 
 .maintenance-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 7px;
 }
 

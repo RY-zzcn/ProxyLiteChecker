@@ -28,6 +28,8 @@ type appSettings struct {
 	DeleteFailedOnCheck      bool     `json:"delete_failed_on_check"`
 	RecheckExpiredEnabled    bool     `json:"recheck_expired_enabled"`
 	AvailableTTLHours        int      `json:"available_ttl_hours"`
+	DeleteExpiredUntested    bool     `json:"delete_expired_untested"`
+	UntestedTTLHours         int      `json:"untested_ttl_hours"`
 	AutoFetchEnabled         bool     `json:"auto_fetch_enabled"`
 	AutoFetchIntervalMinutes int      `json:"auto_fetch_interval_minutes"`
 	AutoFetchSourceIDs       []string `json:"auto_fetch_source_ids"`
@@ -49,6 +51,7 @@ type scheduler struct {
 	lastUntestedCount   int
 	lastFailedDeleted   int64
 	lastExpiredRequeued int64
+	lastUntestedDeleted int64
 	lastMessage         string
 	lastError           string
 }
@@ -77,6 +80,7 @@ type maintenanceStatus struct {
 	LastRunAt       string `json:"last_run_at,omitempty"`
 	FailedDeleted   int64  `json:"failed_deleted"`
 	ExpiredRequeued int64  `json:"expired_requeued"`
+	UntestedDeleted int64  `json:"untested_deleted"`
 }
 
 func defaultAppSettings() appSettings {
@@ -97,6 +101,8 @@ func defaultAppSettings() appSettings {
 		DeleteFailedOnCheck:      false,
 		RecheckExpiredEnabled:    false,
 		AvailableTTLHours:        24,
+		DeleteExpiredUntested:    false,
+		UntestedTTLHours:         72,
 		AutoFetchEnabled:         false,
 		AutoFetchIntervalMinutes: 360,
 		AutoFetchSourceIDs:       nil,
@@ -202,6 +208,12 @@ func settingsFromPayload(current appSettings, payload map[string]any) appSetting
 	if value, ok := payload["available_ttl_hours"]; ok {
 		settings.AvailableTTLHours = anyToInt(value)
 	}
+	if value, ok := payload["delete_expired_untested"]; ok {
+		settings.DeleteExpiredUntested = parseBool(value, settings.DeleteExpiredUntested)
+	}
+	if value, ok := payload["untested_ttl_hours"]; ok {
+		settings.UntestedTTLHours = anyToInt(value)
+	}
 	if value, ok := payload["auto_fetch_enabled"]; ok {
 		settings.AutoFetchEnabled = parseBool(value, settings.AutoFetchEnabled)
 	}
@@ -244,6 +256,7 @@ func normalizeAppSettings(settings appSettings) appSettings {
 	settings.CheckRequestTimeout = clampInt(settings.CheckRequestTimeout, 2, 60)
 	settings.CheckHardTimeout = clampInt(settings.CheckHardTimeout, settings.CheckRequestTimeout, 300)
 	settings.AvailableTTLHours = clampInt(settings.AvailableTTLHours, 1, 8760)
+	settings.UntestedTTLHours = clampInt(settings.UntestedTTLHours, 1, 8760)
 	settings.AutoFetchIntervalMinutes = clampInt(settings.AutoFetchIntervalMinutes, 5, 10080)
 	settings.AutoCheckIntervalMinutes = clampInt(settings.AutoCheckIntervalMinutes, 5, 10080)
 	settings.AutoFetchSourceIDs = validSourceIDs(settings.AutoFetchSourceIDs)
@@ -476,6 +489,7 @@ func (sc *scheduler) Status(settings appSettings) schedulerStatus {
 			LastRunAt:       formatTime(sc.lastMaintenanceAt),
 			FailedDeleted:   sc.lastFailedDeleted,
 			ExpiredRequeued: sc.lastExpiredRequeued,
+			UntestedDeleted: sc.lastUntestedDeleted,
 		},
 		Message: sc.lastMessage,
 		Error:   sc.lastError,
@@ -483,12 +497,12 @@ func (sc *scheduler) Status(settings appSettings) schedulerStatus {
 }
 
 func (sc *scheduler) tickMaintenance(settings appSettings, now time.Time) {
-	deleted, requeued, err := sc.srv.applyProxyMaintenance(settings)
+	deleted, requeued, untestedDeleted, err := sc.srv.applyProxyMaintenance(settings)
 	if err != nil {
 		sc.setError(err)
 		return
 	}
-	if deleted == 0 && requeued == 0 {
+	if deleted == 0 && requeued == 0 && untestedDeleted == 0 {
 		return
 	}
 	sc.mu.Lock()
@@ -496,27 +510,35 @@ func (sc *scheduler) tickMaintenance(settings appSettings, now time.Time) {
 	sc.lastMaintenanceAt = now
 	sc.lastFailedDeleted = deleted
 	sc.lastExpiredRequeued = requeued
+	sc.lastUntestedDeleted = untestedDeleted
 	sc.lastError = ""
-	sc.lastMessage = fmt.Sprintf("自动维护：删除失败 %d，过期转待检 %d", deleted, requeued)
+	sc.lastMessage = fmt.Sprintf("自动维护：删除失败 %d，过期转待检 %d，删除待检 %d", deleted, requeued, untestedDeleted)
 }
 
-func (s *server) applyProxyMaintenance(settings appSettings) (int64, int64, error) {
+func (s *server) applyProxyMaintenance(settings appSettings) (int64, int64, int64, error) {
 	var deleted int64
 	var requeued int64
+	var untestedDeleted int64
 	var err error
 	if settings.DeleteFailedOnCheck {
 		deleted, err = s.store.DeleteFailedProxies()
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
 	}
 	if settings.RecheckExpiredEnabled {
 		requeued, err = s.store.RequeueExpiredAvailable(settings.AvailableTTLHours)
 		if err != nil {
-			return deleted, 0, err
+			return deleted, 0, 0, err
 		}
 	}
-	return deleted, requeued, nil
+	if settings.DeleteExpiredUntested {
+		untestedDeleted, err = s.store.DeleteExpiredUntested(settings.UntestedTTLHours)
+		if err != nil {
+			return deleted, requeued, 0, err
+		}
+	}
+	return deleted, requeued, untestedDeleted, nil
 }
 
 func (sc *scheduler) setError(err error) {

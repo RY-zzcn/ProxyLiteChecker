@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.1.12</span> · 额丶Y</small>
+            <small><span id="versionText">v0.1.13</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -75,7 +75,7 @@
             </div>
           </div>
           <div class="quick-action-grid">
-            <button id="fetchSourcesBtn" class="action-button" data-label="拉取代理源">
+            <button id="fetchSourcesBtn" class="action-button accent" data-label="拉取代理源">
               <strong>拉取代理源</strong>
               <span>选中源导入本地仓库</span>
             </button>
@@ -298,11 +298,19 @@
                     <input id="recheckExpiredEnabled" type="checkbox" />
                     <span>可用过期转待检</span>
                   </label>
+                  <label class="switch-row">
+                    <input id="deleteExpiredUntestedEnabled" type="checkbox" />
+                    <span>待检过期删除</span>
+                  </label>
                 </div>
                 <div class="mini-grid">
                   <label>
                     可用有效期
                     <input id="availableTtlHours" type="number" min="1" max="8760" />
+                  </label>
+                  <label>
+                    待检有效期
+                    <input id="untestedTtlHours" type="number" min="1" max="8760" />
                   </label>
                   <label>
                     每页数量

@@ -85,3 +85,68 @@ func TestTargetSpecificCheckResults(t *testing.T) {
 		t.Fatalf("expected one gemini untested candidate, got %#v", geminiCandidates)
 	}
 }
+
+func TestImportProxiesDeduplicatesByProxyKey(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	result, err := st.ImportProxies("http://1.2.3.4:8080\n1.2.3.4:8080", "test", "http")
+	if err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	if result["added"] != 1 || result["updated"] != 0 || result["total"] != 1 {
+		t.Fatalf("expected duplicate lines to collapse to one added proxy, got %#v", result)
+	}
+	result, err = st.ImportProxies("1.2.3.4:8080", "test-again", "http")
+	if err != nil {
+		t.Fatalf("reimport proxy: %v", err)
+	}
+	if result["added"] != 0 || result["updated"] != 1 {
+		t.Fatalf("expected reimport to update existing proxy, got %#v", result)
+	}
+	_, total, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected one stored proxy after duplicate import, got %d", total)
+	}
+}
+
+func TestDeleteExpiredUntestedOnlyDeletesOldUntested(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080\nhttp://5.6.7.8:8080", "test", "auto"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	if _, err := st.db.Exec(`
+UPDATE proxies
+SET created_at = datetime('now', '-4 hours'),
+    updated_at = datetime('now', '-4 hours')
+WHERE proxy_key = 'http://1.2.3.4:8080'`); err != nil {
+		t.Fatalf("age proxy: %v", err)
+	}
+	deleted, err := st.DeleteExpiredUntested(1)
+	if err != nil {
+		t.Fatalf("delete expired untested: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected one expired untested deleted, got %d", deleted)
+	}
+	_, total, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected one fresh proxy left, got %d", total)
+	}
+}
