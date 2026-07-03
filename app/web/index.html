@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.1.9</span> · 额丶Y</small>
+            <small><span id="versionText">v0.1.10</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -66,7 +66,7 @@
         </article>
       </section>
 
-      <section class="workbench">
+      <section class="top-workspace">
         <section class="panel action-panel">
           <div class="panel-head">
             <div>
@@ -74,7 +74,7 @@
               <p id="sourceCountText">0 个代理源</p>
             </div>
           </div>
-          <div class="action-grid">
+          <div class="quick-action-grid">
             <button id="fetchSourcesBtn" class="action-button" data-label="拉取代理源">
               <strong>拉取代理源</strong>
               <span>选中源导入本地仓库</span>
@@ -92,9 +92,9 @@
               <span>包含目标元数据</span>
             </a>
           </div>
-          <div class="quick-check-bar">
-            <label>
-              范围
+          <div class="quick-param-grid">
+            <label class="field-card">
+              <span>检测范围</span>
               <select id="quickCheckStatus">
                 <option value="untested">待检</option>
                 <option value="failed">失败</option>
@@ -103,7 +103,7 @@
                 <option value="all">全部</option>
               </select>
             </label>
-            <div class="target-field">
+            <div class="field-card target-field">
               <span>检测目标</span>
               <div id="quickCheckTargets" class="target-group compact">
                 <label><input type="checkbox" value="generic" />常规</label>
@@ -113,12 +113,12 @@
                 <label><input type="checkbox" value="claude" />Claude</label>
               </div>
             </div>
-            <label>
-              数量
+            <label class="field-card">
+              <span>检测数量</span>
               <input id="quickCheckLimit" type="number" min="1" max="100000" />
             </label>
-            <label>
-              导出目标
+            <label class="field-card export-field">
+              <span>导出目标</span>
               <select id="exportTarget">
                 <option value="generic">常规</option>
                 <option value="openai">OpenAI</option>
@@ -297,50 +297,14 @@
         </section>
       </section>
 
-      <section class="gateway-block">
+      <section class="panel gateway-panel">
         <div class="section-head">
           <div>
             <h2>本机代理网关</h2>
-            <p id="gatewaySummary">按目标轮询可用上游</p>
+            <p id="gatewaySummary">每个目标一个固定入口</p>
           </div>
-          <label class="compact-label">
-            网关目标
-            <select id="gatewayTarget">
-              <option value="generic">常规</option>
-              <option value="openai">OpenAI</option>
-              <option value="grok">Grok</option>
-              <option value="gemini">Gemini</option>
-              <option value="claude">Claude</option>
-              <option value="all">全部目标</option>
-            </select>
-          </label>
         </div>
-        <section class="gateway-strip">
-          <article>
-            <span>HTTP 网关</span>
-            <strong id="gatewayHttpBind">-</strong>
-          </article>
-          <article>
-            <span>SOCKS5 网关</span>
-            <strong id="gatewaySocks5Bind">-</strong>
-          </article>
-          <article>
-            <span>可用上游</span>
-            <strong id="gatewayUpstreams">0</strong>
-          </article>
-          <article>
-            <span>请求数</span>
-            <strong id="gatewayTotal">0</strong>
-          </article>
-          <article>
-            <span>成功率</span>
-            <strong id="gatewayRate">0%</strong>
-          </article>
-          <article class="gateway-recent">
-            <span>轮询上游</span>
-            <strong id="gatewayLastUpstream">-</strong>
-            <div id="gatewayRecent" class="recent-list"></div>
-          </article>
+        <section id="gatewayCards" class="gateway-card-grid">
         </section>
       </section>
 

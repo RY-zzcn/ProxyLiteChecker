@@ -139,7 +139,6 @@ function defaultSettings() {
     auto_fetch_source_ids: [],
     auto_check_enabled: false,
     auto_check_interval_minutes: 120,
-    gateway_target_profile: "generic",
     export_target_profile: "generic",
   };
 }
@@ -275,7 +274,6 @@ function renderSettings(settings, scheduler) {
   el("settingsCheckRounds").value = state.settings.check_rounds;
   el("settingsCheckTimeout").value = state.settings.check_request_timeout;
   el("settingsCheckHardTimeout").value = state.settings.check_hard_timeout;
-  el("gatewayTarget").value = normalizeTargetValues(state.settings.gateway_target_profile, true)[0];
   el("exportTarget").value = normalizeTargetValues(state.settings.export_target_profile, true)[0];
   updateExportLinks();
   renderSchedulerText(state.scheduler);
@@ -311,28 +309,54 @@ function updateSelectedSources() {
 }
 
 function renderGateway(gateway) {
-  const httpBind = gateway.enabled ? displayGatewayBind(gateway, "http") : "未启用";
-  const socks5Bind = gateway.enabled && gateway.socks5_enabled ? displayGatewayBind(gateway, "socks5") : "未启用";
-  const upstreams = gateway.upstreams || 0;
-  const target = gateway.target_profile || state.settings?.gateway_target_profile || "generic";
-  el("gatewayHttpBind").textContent = httpBind;
-  el("gatewaySocks5Bind").textContent = socks5Bind;
-  el("gatewayUpstreams").textContent = upstreams;
-  el("gatewayTotal").textContent = gateway.total_requests || 0;
-  el("gatewayRate").textContent = `${Math.round((gateway.success_rate || 0) * 100)}%`;
-  el("gatewayLastUpstream").textContent = gateway.last_upstream || "-";
+  const profiles = (gateway.profiles || []).length ? gateway.profiles : [gateway];
+  const enabledProfiles = profiles.filter((item) => item && (item.http_enabled || item.socks5_enabled || gateway.enabled));
+  const upstreams = profiles.reduce((total, item) => total + Number(item.upstreams || 0), 0);
+  const totalRequests = Number(gateway.total_requests || profiles.reduce((total, item) => total + Number(item.total_requests || 0), 0));
   el("gatewaySummary").textContent = gateway.enabled
-    ? `${targetLabel(target)} · ${upstreams} 个可用上游 · 最近请求 ${gateway.total_requests || 0}`
+    ? `${enabledProfiles.length} 个目标入口 · ${upstreams} 个可用上游 · 最近请求 ${totalRequests}`
     : "网关未启用";
-  el("gatewayRecent").innerHTML =
-    (gateway.recent_upstreams || [])
-      .slice()
-      .reverse()
-      .map((item) => `<span title="${escapeHtml(item)}">${escapeHtml(item)}</span>`)
-      .join("") || `<span>等待网关请求</span>`;
+  el("gatewayCards").innerHTML =
+    profiles
+      .map((item) => gatewayCardHTML(item, gateway.enabled))
+      .join("") || `<article class="gateway-card empty-row">网关未启用</article>`;
   const pill = el("gatewayPill");
-  pill.textContent = gateway.enabled ? `${targetLabel(target)} · HTTP ${httpBind} · SOCKS5 ${socks5Bind} · ${upstreams} 上游` : "网关未启用";
+  pill.textContent = gateway.enabled ? `网关 ${enabledProfiles.length} 目标 · ${upstreams} 上游` : "网关未启用";
   pill.classList.toggle("offline", !gateway.enabled);
+}
+
+function gatewayCardHTML(item, gatewayEnabled) {
+  const profile = item.target_profile || "generic";
+  const httpBind = gatewayEnabled && item.http_enabled !== false ? displayGatewayBind(item, "http") : "未启用";
+  const socks5Bind = gatewayEnabled && item.socks5_enabled ? displayGatewayBind(item, "socks5") : "未启用";
+  const recent = (item.recent_upstreams || [])
+    .slice()
+    .reverse()
+    .map((upstream) => `<span title="${escapeHtml(upstream)}">${escapeHtml(upstream)}</span>`)
+    .join("");
+  return `
+    <article class="gateway-card">
+      <div class="gateway-card-head">
+        <strong>${escapeHtml(targetLabel(profile))}</strong>
+        <span>${Number(item.upstreams || 0)} 上游</span>
+      </div>
+      <div class="endpoint-pair">
+        <div>
+          <span>HTTP</span>
+          <code>${escapeHtml(httpBind)}</code>
+        </div>
+        <div>
+          <span>SOCKS5</span>
+          <code>${escapeHtml(socks5Bind)}</code>
+        </div>
+      </div>
+      <div class="gateway-card-meta">
+        <span>请求 ${Number(item.total_requests || 0)}</span>
+        <span>成功率 ${Math.round(Number(item.success_rate || 0) * 100)}%</span>
+      </div>
+      <div class="recent-list">${recent || "<span>等待请求</span>"}</div>
+    </article>
+  `;
 }
 
 function displayGatewayBind(gateway, type) {
@@ -573,7 +597,6 @@ async function saveSettings(event) {
         auto_fetch_source_ids: allSourcesSelected ? [] : selectedSourceIDs,
         auto_check_enabled: el("autoCheckEnabled").checked,
         auto_check_interval_minutes: Number(el("autoCheckInterval").value || 120),
-        gateway_target_profile: el("gatewayTarget").value,
         export_target_profile: el("exportTarget").value,
       }),
     });
@@ -593,16 +616,6 @@ async function savePartialSettings(partial) {
   renderSettings(payload.settings, payload.scheduler);
   state.proxies.limit = Number(payload.settings.proxy_page_size || 50);
   return payload;
-}
-
-async function saveGatewayTarget() {
-  try {
-    await savePartialSettings({ gateway_target_profile: el("gatewayTarget").value });
-    await loadGateway();
-    toast("网关目标已保存", "success");
-  } catch (error) {
-    toast(error.message, "error");
-  }
 }
 
 async function saveExportTarget() {
@@ -702,7 +715,6 @@ function bindEvents() {
   el("settingsCheckLimit").addEventListener("input", () => {
     el("quickCheckLimit").value = el("settingsCheckLimit").value;
   });
-  el("gatewayTarget").addEventListener("change", saveGatewayTarget);
   el("exportTarget").addEventListener("change", saveExportTarget);
   el("proxyPageSize").addEventListener("change", () => {
     state.proxies.limit = Number(el("proxyPageSize").value || 50);

@@ -36,16 +36,14 @@ Default web address:
 http://127.0.0.1:8899
 ```
 
-Default HTTP gateway:
+Default target gateway ports:
 
 ```text
-http://0.0.0.0:18080
-```
-
-Default SOCKS5 gateway:
-
-```text
-socks5://0.0.0.0:18081
+generic  HTTP 18080 / SOCKS5 18081
+openai   HTTP 18082 / SOCKS5 18083
+grok     HTTP 18084 / SOCKS5 18085
+gemini   HTTP 18086 / SOCKS5 18087
+claude   HTTP 18088 / SOCKS5 18089
 ```
 
 ## Guardrails

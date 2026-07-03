@@ -13,8 +13,7 @@ ProxyLiteChecker 是 ProxyPoolChecker 的单机轻量版本。它没有面板和
 - 内置代理源：可一键拉取公开代理源，也可以手动导入代理文本。
 - 自动任务：可在 Web UI 中保存自动拉取、低待检补源、自动检测、失败清理、过期重检、检测范围、目标、并发、超时和分页设置。
 - 有效代理导出：提供按检测目标分类的 TXT / JSON 导出接口，方便脚本或其它本机服务消费。
-- HTTP 代理网关：默认绑定 `0.0.0.0:18080`，可按常规、OpenAI、Grok、Gemini、Claude 或全部目标轮询可用上游。
-- SOCKS5 代理网关：默认绑定 `0.0.0.0:18081`，和 HTTP 网关共享同一个按目标分类的可用代理池。
+- 目标化代理网关：每个检测目标都有固定 HTTP/SOCKS5 入口，可同时供多个不同目标需求的本机项目使用。
 
 ## 快速开始
 
@@ -23,8 +22,7 @@ ProxyLiteChecker 是 ProxyPoolChecker 的单机轻量版本。它没有面板和
 ```bash
 docker run -d --name proxylitechecker \
   -p 8899:8899 \
-  -p 18080:18080 \
-  -p 18081:18081 \
+  -p 18080-18089:18080-18089 \
   -e ADMIN_PASSWORD='请改成强密码' \
   -e SECRET_KEY='请改成强随机字符串' \
   -v proxylite-data:/app/data \
@@ -84,7 +82,7 @@ SECRET_KEY=请改成强随机字符串
 
 快速操作区的“本机检测”旁边也提供检测范围、多个检测目标、检测数量和导出目标。这些控件会和完整设置面板同步，适合临时改目标或改单次检测规模后马上执行。
 
-网关状态区位于代理仓库上方，可以切换网关目标并查看最近轮询到的上游代理。TXT / JSON 导出链接会跟随“导出目标”生成 `target_profile` 参数。
+网关状态区位于代理仓库上方，按目标展示固定 HTTP/SOCKS5 入口和最近轮询到的上游代理。TXT / JSON 导出链接会跟随“导出目标”生成 `target_profile` 参数；导出目标只影响导出链接，不影响自动检测调度。
 
 拉取和检测属于重任务，同一时间只会运行一个。自动任务遇到手动任务时会延后，不会并发抢占数据库和网络资源。
 
@@ -101,8 +99,8 @@ ghcr.io/ry-zzcn/proxylitechecker
 | 标签 | 说明 |
 | --- | --- |
 | `latest` | `main` 分支最新镜像 |
-| `v0.1.9` / 其它 `v*` | 对应版本镜像 |
-| `0.1` | `0.1.x` 小版本线最新镜像，会随 `v0.1.9`、后续 `v0.1.10` 等自动前移 |
+| `v0.1.10` / 其它 `v*` | 对应版本镜像 |
+| `0.1` | `0.1.x` 小版本线最新镜像，会随 `v0.1.10`、后续 `v0.1.11` 等自动前移 |
 
 查看仓库 Packages 页面：
 
@@ -171,16 +169,22 @@ Unblock-File .\proxylite-windows-amd64.exe
 | 端口 | 用途 |
 | --- | --- |
 | `8899` | Web UI 和 API |
-| `18080` | HTTP 代理网关 |
-| `18081` | SOCKS5 代理网关 |
+| `18080` / `18081` | 常规目标 HTTP / SOCKS5 代理网关 |
+| `18082` / `18083` | OpenAI 目标 HTTP / SOCKS5 代理网关 |
+| `18084` / `18085` | Grok 目标 HTTP / SOCKS5 代理网关 |
+| `18086` / `18087` | Gemini 目标 HTTP / SOCKS5 代理网关 |
+| `18088` / `18089` | Claude 目标 HTTP / SOCKS5 代理网关 |
 
 ## 默认端口
 
 | 端口 | 用途 |
 | --- | --- |
 | `8899` | Web UI 和 API |
-| `18080` | HTTP 代理网关 |
-| `18081` | SOCKS5 代理网关 |
+| `18080` / `18081` | 常规目标 HTTP / SOCKS5 代理网关 |
+| `18082` / `18083` | OpenAI 目标 HTTP / SOCKS5 代理网关 |
+| `18084` / `18085` | Grok 目标 HTTP / SOCKS5 代理网关 |
+| `18086` / `18087` | Gemini 目标 HTTP / SOCKS5 代理网关 |
+| `18088` / `18089` | Claude 目标 HTTP / SOCKS5 代理网关 |
 
 ## 环境变量
 
@@ -196,12 +200,16 @@ Unblock-File .\proxylite-windows-amd64.exe
 | `PLC_EXPORT_TOKEN` | 空 | 导出接口令牌，空时仅登录用户可访问 |
 | `PLC_GATEWAY_ENABLED` | `1` | 是否启动本机 HTTP 网关 |
 | `PLC_GATEWAY_HOST` | `0.0.0.0` | 网关绑定地址 |
-| `PLC_GATEWAY_PORT` | `18080` | 网关端口 |
+| `PLC_GATEWAY_PORT` | `18080` | 首个 HTTP 目标入口端口 |
+| `PLC_GATEWAY_TARGET_PROFILES` | `all` | 开放哪些目标入口，逗号分隔；`all` 表示内置全部目标 |
+| `PLC_GATEWAY_PROFILE_PORT_STRIDE` | `2` | 未显式覆盖端口时，每个目标端口的步进 |
+| `PLC_GATEWAY_HTTP_PROFILE_PORTS` | 空 | 覆盖 HTTP 目标端口，如 `openai:18082,claude:18088` |
 | `PLC_SOCKS5_GATEWAY_ENABLED` | `1` | 是否启动 SOCKS5 网关 |
 | `PLC_SOCKS5_GATEWAY_HOST` | `0.0.0.0` | SOCKS5 网关绑定地址 |
-| `PLC_SOCKS5_GATEWAY_PORT` | `18081` | SOCKS5 网关端口 |
+| `PLC_SOCKS5_GATEWAY_PORT` | `18081` | 首个 SOCKS5 目标入口端口 |
+| `PLC_GATEWAY_SOCKS5_PROFILE_PORTS` | 空 | 覆盖 SOCKS5 目标端口，如 `openai:18083,claude:18089` |
 
-默认网关监听 `0.0.0.0` 是为了方便本机 Docker 容器和同网络服务访问。公网部署时建议用防火墙或安全组限制 `18080` / `18081` 的访问来源，避免把代理网关暴露成开放代理。
+默认网关监听 `0.0.0.0` 是为了方便本机 Docker 容器和同网络服务访问。公网部署时建议用防火墙或安全组限制 `18080-18089` 的访问来源，避免把代理网关暴露成开放代理。
 
 ## 与 ProxyPoolChecker 的区别
 

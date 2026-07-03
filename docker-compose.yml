@@ -1,6 +1,6 @@
 services:
   proxylitechecker:
-    image: ghcr.io/ry-zzcn/proxylitechecker:v0.1.9
+    image: ghcr.io/ry-zzcn/proxylitechecker:v0.1.10
     build: .
     container_name: proxylitechecker
     restart: unless-stopped
@@ -9,7 +9,6 @@ services:
         required: false
     ports:
       - "8899:8899"
-      - "18080:18080"
-      - "18081:18081"
+      - "18080-18089:18080-18089"
     volumes:
       - ./data:/app/data

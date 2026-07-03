@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.10 - 2026-07-03
+
+- Change the local gateway model to fixed per-target entrances, matching the ProxyPoolChecker gateway pattern without adding node/panel concepts.
+- Expose default target ports as generic `18080/18081`, OpenAI `18082/18083`, Grok `18084/18085`, Gemini `18086/18087`, and Claude `18088/18089`.
+- Redesign the single-page console layout with a cleaner quick-operation area, structured check/export parameters, compact configuration panels, and target gateway cards.
+- Keep export target selection isolated to export links and persisted runtime settings so it does not affect check scheduling.
+
 ## 0.1.9 - 2026-07-03
 
 - Add per-target proxy check storage so one proxy can keep separate results for generic, OpenAI, Grok, Gemini, and Claude targets.

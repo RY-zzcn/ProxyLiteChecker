@@ -20,31 +20,35 @@ import (
 )
 
 const (
-	appVersion           = "0.1.9"
+	appVersion           = "0.1.10"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
 )
 
 type config struct {
-	AppName              string
-	AppVersion           string
-	Host                 string
-	Port                 int
-	DatabaseURL          string
-	AdminUsername        string
-	AdminPassword        string
-	SecretKey            string
-	AccessTokenMinutes   int
-	WebDir               string
-	ExportToken          string
-	GatewayEnabled       bool
-	GatewayHost          string
-	GatewayPort          int
-	Socks5GatewayEnabled bool
-	Socks5GatewayHost    string
-	Socks5GatewayPort    int
-	GatewayUpstreamLimit int
+	AppName                   string
+	AppVersion                string
+	Host                      string
+	Port                      int
+	DatabaseURL               string
+	AdminUsername             string
+	AdminPassword             string
+	SecretKey                 string
+	AccessTokenMinutes        int
+	WebDir                    string
+	ExportToken               string
+	GatewayEnabled            bool
+	GatewayHost               string
+	GatewayPort               int
+	Socks5GatewayEnabled      bool
+	Socks5GatewayHost         string
+	Socks5GatewayPort         int
+	GatewayUpstreamLimit      int
+	GatewayTargetProfiles     []string
+	GatewayHTTPProfilePorts   map[string]int
+	GatewaySocks5ProfilePorts map[string]int
+	GatewayProfilePortStride  int
 }
 
 type server struct {
@@ -66,13 +70,17 @@ func main() {
 	srv := newServer(cfg)
 	if srv.cfg.GatewayEnabled {
 		srv.gateway = newGatewayServer(srv.store, gatewayConfig{
-			Host:            srv.cfg.GatewayHost,
-			Port:            srv.cfg.GatewayPort,
-			Socks5Enabled:   srv.cfg.Socks5GatewayEnabled,
-			Socks5Host:      srv.cfg.Socks5GatewayHost,
-			Socks5Port:      srv.cfg.Socks5GatewayPort,
-			UpstreamLimit:   srv.cfg.GatewayUpstreamLimit,
-			RequestTimeoutS: 20,
+			Host:               srv.cfg.GatewayHost,
+			Port:               srv.cfg.GatewayPort,
+			Socks5Enabled:      srv.cfg.Socks5GatewayEnabled,
+			Socks5Host:         srv.cfg.Socks5GatewayHost,
+			Socks5Port:         srv.cfg.Socks5GatewayPort,
+			UpstreamLimit:      srv.cfg.GatewayUpstreamLimit,
+			RequestTimeoutS:    20,
+			TargetProfiles:     srv.cfg.GatewayTargetProfiles,
+			HTTPProfilePorts:   srv.cfg.GatewayHTTPProfilePorts,
+			Socks5ProfilePorts: srv.cfg.GatewaySocks5ProfilePorts,
+			ProfilePortStride:  srv.cfg.GatewayProfilePortStride,
 		})
 		go func() {
 			if err := srv.gateway.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -94,25 +102,58 @@ func loadConfig() config {
 	}
 	port := clampInt(envInt("PORT", 8899), 1, 65535)
 	return config{
-		AppName:              envString("APP_NAME", "ProxyLiteChecker"),
-		AppVersion:           envString("APP_VERSION", appVersion),
-		Host:                 envString("HOST", "0.0.0.0"),
-		Port:                 port,
-		DatabaseURL:          envString("DATABASE_URL", "sqlite:///./data/proxylite.db"),
-		AdminUsername:        envString("ADMIN_USERNAME", "admin"),
-		AdminPassword:        envString("ADMIN_PASSWORD", defaultAdminPassword),
-		SecretKey:            envString("SECRET_KEY", defaultSecretKey),
-		AccessTokenMinutes:   clampInt(envInt("ACCESS_TOKEN_MINUTES", 1440), 5, 525600),
-		WebDir:               webDir,
-		ExportToken:          envString("PLC_EXPORT_TOKEN", ""),
-		GatewayEnabled:       envBool("PLC_GATEWAY_ENABLED", true),
-		GatewayHost:          envString("PLC_GATEWAY_HOST", "0.0.0.0"),
-		GatewayPort:          clampInt(envInt("PLC_GATEWAY_PORT", 18080), 1, 65535),
-		Socks5GatewayEnabled: envBool("PLC_SOCKS5_GATEWAY_ENABLED", true),
-		Socks5GatewayHost:    envString("PLC_SOCKS5_GATEWAY_HOST", envString("PLC_GATEWAY_HOST", "0.0.0.0")),
-		Socks5GatewayPort:    clampInt(envInt("PLC_SOCKS5_GATEWAY_PORT", 18081), 1, 65535),
-		GatewayUpstreamLimit: clampInt(envInt("PLC_GATEWAY_UPSTREAM_LIMIT", 200), 1, 2000),
+		AppName:                   envString("APP_NAME", "ProxyLiteChecker"),
+		AppVersion:                envString("APP_VERSION", appVersion),
+		Host:                      envString("HOST", "0.0.0.0"),
+		Port:                      port,
+		DatabaseURL:               envString("DATABASE_URL", "sqlite:///./data/proxylite.db"),
+		AdminUsername:             envString("ADMIN_USERNAME", "admin"),
+		AdminPassword:             envString("ADMIN_PASSWORD", defaultAdminPassword),
+		SecretKey:                 envString("SECRET_KEY", defaultSecretKey),
+		AccessTokenMinutes:        clampInt(envInt("ACCESS_TOKEN_MINUTES", 1440), 5, 525600),
+		WebDir:                    webDir,
+		ExportToken:               envString("PLC_EXPORT_TOKEN", ""),
+		GatewayEnabled:            envBool("PLC_GATEWAY_ENABLED", true),
+		GatewayHost:               envString("PLC_GATEWAY_HOST", "0.0.0.0"),
+		GatewayPort:               clampInt(envInt("PLC_GATEWAY_PORT", 18080), 1, 65535),
+		Socks5GatewayEnabled:      envBool("PLC_SOCKS5_GATEWAY_ENABLED", true),
+		Socks5GatewayHost:         envString("PLC_SOCKS5_GATEWAY_HOST", envString("PLC_GATEWAY_HOST", "0.0.0.0")),
+		Socks5GatewayPort:         clampInt(envInt("PLC_SOCKS5_GATEWAY_PORT", 18081), 1, 65535),
+		GatewayUpstreamLimit:      clampInt(envInt("PLC_GATEWAY_UPSTREAM_LIMIT", 200), 1, 2000),
+		GatewayTargetProfiles:     gatewayTargetProfilesFromEnv(),
+		GatewayHTTPProfilePorts:   gatewayProfilePortMapFromEnv("PLC_GATEWAY_HTTP_PROFILE_PORTS"),
+		GatewaySocks5ProfilePorts: gatewayProfilePortMapFromEnv("PLC_GATEWAY_SOCKS5_PROFILE_PORTS"),
+		GatewayProfilePortStride:  clampInt(envInt("PLC_GATEWAY_PROFILE_PORT_STRIDE", 2), 1, 100),
 	}
+}
+
+func gatewayTargetProfilesFromEnv() []string {
+	raw := strings.TrimSpace(envString("PLC_GATEWAY_TARGET_PROFILES", "all"))
+	return normalizeTargetProfiles(anyToStringSlice(raw))
+}
+
+func gatewayProfilePortMapFromEnv(key string) map[string]int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	ports := map[string]int{}
+	for _, part := range strings.Split(raw, ",") {
+		pair := strings.SplitN(strings.TrimSpace(part), ":", 2)
+		if len(pair) != 2 {
+			continue
+		}
+		profile := strings.ToLower(strings.TrimSpace(pair[0]))
+		if _, ok := targetProfiles[profile]; !ok {
+			continue
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(pair[1]))
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		ports[profile] = port
+	}
+	return ports
 }
 
 func applySecurityBaseline(cfg config) config {

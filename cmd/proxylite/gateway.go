@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,18 +19,32 @@ import (
 )
 
 type gatewayConfig struct {
-	Host            string
-	Port            int
-	Socks5Enabled   bool
-	Socks5Host      string
-	Socks5Port      int
-	UpstreamLimit   int
-	RequestTimeoutS int
+	Host               string
+	Port               int
+	Socks5Enabled      bool
+	Socks5Host         string
+	Socks5Port         int
+	UpstreamLimit      int
+	RequestTimeoutS    int
+	TargetProfiles     []string
+	HTTPProfilePorts   map[string]int
+	Socks5ProfilePorts map[string]int
+	ProfilePortStride  int
 }
 
 type gatewayServer struct {
-	store           *store
-	cfg             gatewayConfig
+	store     *store
+	cfg       gatewayConfig
+	endpoints []*gatewayEndpoint
+	startedAt string
+}
+
+type gatewayEndpoint struct {
+	TargetProfile   string
+	HTTPHost        string
+	HTTPPort        int
+	Socks5Host      string
+	Socks5Port      int
 	http            *http.Server
 	socks5Listener  net.Listener
 	mu              sync.Mutex
@@ -41,108 +56,200 @@ type gatewayServer struct {
 	failedRequests  int64
 	lastUpstream    atomic.Value
 	lastError       atomic.Value
-	startedAt       string
 }
 
 func newGatewayServer(store *store, cfg gatewayConfig) *gatewayServer {
 	if cfg.RequestTimeoutS <= 0 {
 		cfg.RequestTimeoutS = 20
 	}
+	if cfg.ProfilePortStride <= 0 {
+		cfg.ProfilePortStride = 2
+	}
+	profiles := normalizeTargetProfiles(cfg.TargetProfiles)
 	gateway := &gatewayServer{store: store, cfg: cfg, startedAt: time.Now().UTC().Format(time.RFC3339)}
-	gateway.http = &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
-		Handler:           gateway,
-		ReadHeaderTimeout: 10 * time.Second,
+	for index, profile := range profiles {
+		endpoint := &gatewayEndpoint{
+			TargetProfile: profile,
+			HTTPHost:      cfg.Host,
+			HTTPPort:      gatewayProfilePortForProfile(profile, cfg.Port, index, cfg.HTTPProfilePorts, cfg.ProfilePortStride),
+			Socks5Host:    cfg.Socks5Host,
+			Socks5Port:    gatewayProfilePortForProfile(profile, cfg.Socks5Port, index, cfg.Socks5ProfilePorts, cfg.ProfilePortStride),
+		}
+		if !cfg.Socks5Enabled {
+			endpoint.Socks5Port = 0
+		}
+		gateway.endpoints = append(gateway.endpoints, endpoint)
 	}
 	return gateway
 }
 
 func (g *gatewayServer) Start() error {
-	if g.cfg.Socks5Enabled {
-		go func() {
-			if err := g.startSocks5Gateway(); err != nil {
-				log.Printf("SOCKS5 gateway stopped: %v", err)
-			}
-		}()
+	if len(g.endpoints) == 0 {
+		return nil
 	}
-	log.Printf("starting HTTP gateway on %s", g.http.Addr)
-	return g.http.ListenAndServe()
+	for _, endpoint := range g.endpoints {
+		if endpoint.HTTPPort > 0 {
+			if err := g.startHTTPGateway(endpoint); err != nil {
+				log.Printf("HTTP gateway target=%s disabled: %v", endpoint.TargetProfile, err)
+			}
+		}
+		if endpoint.Socks5Port > 0 {
+			if err := g.startSocks5Gateway(endpoint); err != nil {
+				log.Printf("SOCKS5 gateway target=%s disabled: %v", endpoint.TargetProfile, err)
+			}
+		}
+	}
+	return nil
 }
 
-func (g *gatewayServer) startSocks5Gateway() error {
-	addr := fmt.Sprintf("%s:%d", g.cfg.Socks5Host, g.cfg.Socks5Port)
+func (g *gatewayServer) startHTTPGateway(endpoint *gatewayEndpoint) error {
+	addr := net.JoinHostPort(endpoint.HTTPHost, strconv.Itoa(endpoint.HTTPPort))
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	g.socks5Listener = listener
-	log.Printf("starting SOCKS5 gateway on %s", addr)
+	endpoint.http = &http.Server{
+		Handler:           gatewayHTTPHandler{gateway: g, endpoint: endpoint},
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	log.Printf("starting HTTP gateway target=%s on %s", endpoint.TargetProfile, listener.Addr())
+	go func() {
+		if err := endpoint.http.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP gateway target=%s stopped: %v", endpoint.TargetProfile, err)
+		}
+	}()
+	return nil
+}
+
+func (g *gatewayServer) startSocks5Gateway(endpoint *gatewayEndpoint) error {
+	addr := net.JoinHostPort(endpoint.Socks5Host, strconv.Itoa(endpoint.Socks5Port))
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	endpoint.socks5Listener = listener
+	log.Printf("starting SOCKS5 gateway target=%s on %s", endpoint.TargetProfile, listener.Addr())
+	go g.serveSocks5Gateway(endpoint, listener)
+	return nil
+}
+
+func (g *gatewayServer) serveSocks5Gateway(endpoint *gatewayEndpoint, listener net.Listener) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			return err
+			log.Printf("SOCKS5 gateway target=%s stopped: %v", endpoint.TargetProfile, err)
+			return
 		}
-		go g.handleSocks5Conn(conn)
+		go g.handleSocks5Conn(conn, endpoint)
 	}
 }
 
 func (g *gatewayServer) Status() map[string]any {
-	total := atomic.LoadInt64(&g.totalRequests)
-	success := atomic.LoadInt64(&g.successRequests)
-	failed := atomic.LoadInt64(&g.failedRequests)
+	profiles := make([]map[string]any, 0, len(g.endpoints))
+	total := int64(0)
+	success := int64(0)
+	failed := int64(0)
+	upstreamCount := 0
+	for _, endpoint := range g.endpoints {
+		item := g.endpointStatus(endpoint)
+		profiles = append(profiles, item)
+		total += atomic.LoadInt64(&endpoint.totalRequests)
+		success += atomic.LoadInt64(&endpoint.successRequests)
+		failed += atomic.LoadInt64(&endpoint.failedRequests)
+		upstreamCount += anyToInt(item["upstreams"])
+	}
 	successRate := 0.0
 	if total > 0 {
 		successRate = float64(success) / float64(total)
 	}
-	upstreamCount := 0
-	targetProfile := g.targetProfile()
-	if g.store != nil {
-		items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, targetProfile)
-		if err == nil {
-			upstreamCount = len(items)
-		}
+	primary := map[string]any{}
+	if len(profiles) > 0 {
+		primary = profiles[0]
 	}
 	return map[string]any{
-		"bind":             g.http.Addr,
-		"http_bind":        g.http.Addr,
-		"http_host":        g.cfg.Host,
-		"http_port":        g.cfg.Port,
+		"bind":             primary["http_bind"],
+		"http_bind":        primary["http_bind"],
+		"http_host":        primary["http_host"],
+		"http_port":        primary["http_port"],
 		"socks5_enabled":   g.cfg.Socks5Enabled,
-		"socks5_bind":      fmt.Sprintf("%s:%d", g.cfg.Socks5Host, g.cfg.Socks5Port),
-		"socks5_host":      g.cfg.Socks5Host,
-		"socks5_port":      g.cfg.Socks5Port,
-		"target_profile":   targetProfile,
+		"socks5_bind":      primary["socks5_bind"],
+		"socks5_host":      primary["socks5_host"],
+		"socks5_port":      primary["socks5_port"],
+		"target_profile":   primary["target_profile"],
 		"upstreams":        upstreamCount,
 		"total_requests":   total,
 		"success_requests": success,
 		"failed_requests":  failed,
 		"success_rate":     successRate,
-		"last_upstream":    valueString(g.lastUpstream.Load()),
-		"recent_upstreams": g.recentSnapshot(),
-		"last_error":       valueString(g.lastError.Load()),
+		"last_upstream":    primary["last_upstream"],
+		"recent_upstreams": primary["recent_upstreams"],
+		"last_error":       primary["last_error"],
+		"profiles":         profiles,
 		"started_at":       g.startedAt,
 	}
 }
 
-func (g *gatewayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	atomic.AddInt64(&g.totalRequests, 1)
-	if r.Method == http.MethodConnect {
-		g.handleConnect(w, r)
-		return
+func (g *gatewayServer) endpointStatus(endpoint *gatewayEndpoint) map[string]any {
+	total := atomic.LoadInt64(&endpoint.totalRequests)
+	success := atomic.LoadInt64(&endpoint.successRequests)
+	failed := atomic.LoadInt64(&endpoint.failedRequests)
+	successRate := 0.0
+	if total > 0 {
+		successRate = float64(success) / float64(total)
 	}
-	g.handleForward(w, r)
+	upstreamCount := 0
+	if g.store != nil {
+		items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, endpoint.TargetProfile)
+		if err == nil {
+			upstreamCount = len(items)
+		}
+	}
+	return map[string]any{
+		"target_profile":   endpoint.TargetProfile,
+		"label":            targetProfileLabel(endpoint.TargetProfile),
+		"http_enabled":     endpoint.HTTPPort > 0 && endpoint.http != nil,
+		"http_bind":        net.JoinHostPort(endpoint.HTTPHost, strconv.Itoa(endpoint.HTTPPort)),
+		"http_host":        endpoint.HTTPHost,
+		"http_port":        endpoint.HTTPPort,
+		"socks5_enabled":   endpoint.Socks5Port > 0 && endpoint.socks5Listener != nil,
+		"socks5_bind":      net.JoinHostPort(endpoint.Socks5Host, strconv.Itoa(endpoint.Socks5Port)),
+		"socks5_host":      endpoint.Socks5Host,
+		"socks5_port":      endpoint.Socks5Port,
+		"upstreams":        upstreamCount,
+		"total_requests":   total,
+		"success_requests": success,
+		"failed_requests":  failed,
+		"success_rate":     successRate,
+		"last_upstream":    valueString(endpoint.lastUpstream.Load()),
+		"recent_upstreams": endpoint.recentSnapshot(),
+		"last_error":       valueString(endpoint.lastError.Load()),
+	}
 }
 
-func (g *gatewayServer) handleForward(w http.ResponseWriter, r *http.Request) {
-	upstream, err := g.selectUpstream()
+type gatewayHTTPHandler struct {
+	gateway  *gatewayServer
+	endpoint *gatewayEndpoint
+}
+
+func (h gatewayHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	atomic.AddInt64(&h.endpoint.totalRequests, 1)
+	if r.Method == http.MethodConnect {
+		h.gateway.handleConnect(w, r, h.endpoint)
+		return
+	}
+	h.gateway.handleForward(w, r, h.endpoint)
+}
+
+func (g *gatewayServer) handleForward(w http.ResponseWriter, r *http.Request, endpoint *gatewayEndpoint) {
+	upstream, err := g.selectUpstream(endpoint)
 	if err != nil {
-		g.recordFailure("", err)
+		endpoint.recordFailure("", err)
 		errorResponse(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	client, _, err := proxyHTTPClient(upstream, g.cfg.RequestTimeoutS)
 	if err != nil {
-		g.recordFailure(upstream, err)
+		endpoint.recordFailure(upstream, err)
 		errorResponse(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -154,7 +261,7 @@ func (g *gatewayServer) handleForward(w http.ResponseWriter, r *http.Request) {
 	outReq.Header.Del("Proxy-Authorization")
 	resp, err := client.Do(outReq)
 	if err != nil {
-		g.recordFailure(upstream, err)
+		endpoint.recordFailure(upstream, err)
 		errorResponse(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -162,13 +269,13 @@ func (g *gatewayServer) handleForward(w http.ResponseWriter, r *http.Request) {
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
-	g.recordSuccess(upstream)
+	endpoint.recordSuccess(upstream)
 }
 
-func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request) {
-	upstream, err := g.selectUpstream()
+func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request, endpoint *gatewayEndpoint) {
+	upstream, err := g.selectUpstream(endpoint)
 	if err != nil {
-		g.recordFailure("", err)
+		endpoint.recordFailure("", err)
 		errorResponse(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
@@ -180,107 +287,96 @@ func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	upstreamConn, err := dialThroughProxy(ctx, upstream, target, time.Duration(g.cfg.RequestTimeoutS)*time.Second)
 	if err != nil {
-		g.recordFailure(upstream, err)
+		endpoint.recordFailure(upstream, err)
 		errorResponse(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		_ = upstreamConn.Close()
-		g.recordFailure(upstream, fmt.Errorf("hijacking not supported"))
+		endpoint.recordFailure(upstream, fmt.Errorf("hijacking not supported"))
 		errorResponse(w, http.StatusInternalServerError, "hijacking not supported")
 		return
 	}
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		_ = upstreamConn.Close()
-		g.recordFailure(upstream, err)
+		endpoint.recordFailure(upstream, err)
 		return
 	}
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	g.recordSuccess(upstream)
+	endpoint.recordSuccess(upstream)
 	pipeBidirectional(clientConn, upstreamConn)
 }
 
-func (g *gatewayServer) selectUpstream() (string, error) {
+func (g *gatewayServer) selectUpstream(endpoint *gatewayEndpoint) (string, error) {
 	if g.store == nil {
 		return "", fmt.Errorf("store unavailable")
 	}
-	items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, g.targetProfile())
+	items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, endpoint.TargetProfile)
 	if err != nil {
 		return "", err
 	}
 	if len(items) == 0 {
-		return "", fmt.Errorf("no available proxies; run a check first")
+		return "", fmt.Errorf("no available %s proxies; run a check first", targetProfileLabel(endpoint.TargetProfile))
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	item := items[g.index%len(items)]
-	g.index++
-	g.rememberUpstreamLocked(item)
+	endpoint.mu.Lock()
+	defer endpoint.mu.Unlock()
+	item := items[endpoint.index%len(items)]
+	endpoint.index++
+	endpoint.rememberUpstreamLocked(item)
 	return item, nil
 }
 
-func (g *gatewayServer) recordSuccess(upstream string) {
-	atomic.AddInt64(&g.successRequests, 1)
-	g.lastUpstream.Store(maskProxyURL(upstream))
-	g.lastError.Store("")
+func (e *gatewayEndpoint) recordSuccess(upstream string) {
+	atomic.AddInt64(&e.successRequests, 1)
+	e.lastUpstream.Store(maskProxyURL(upstream))
+	e.lastError.Store("")
 }
 
-func (g *gatewayServer) recordFailure(upstream string, err error) {
-	atomic.AddInt64(&g.failedRequests, 1)
+func (e *gatewayEndpoint) recordFailure(upstream string, err error) {
+	atomic.AddInt64(&e.failedRequests, 1)
 	if upstream != "" {
-		g.lastUpstream.Store(maskProxyURL(upstream))
+		e.lastUpstream.Store(maskProxyURL(upstream))
 	}
 	if err != nil {
-		g.lastError.Store(err.Error())
+		e.lastError.Store(err.Error())
 	}
 }
 
-func (g *gatewayServer) targetProfile() string {
-	if g.store == nil {
-		return "generic"
-	}
-	settings, err := g.store.AppSettings()
-	if err != nil {
-		return "generic"
-	}
-	return normalizeTargetProfileOrAll(settings.GatewayTargetProfile, "generic")
-}
-
-func (g *gatewayServer) rememberUpstreamLocked(upstream string) {
+func (e *gatewayEndpoint) rememberUpstreamLocked(upstream string) {
 	masked := maskProxyURL(upstream)
-	g.lastUpstream.Store(masked)
-	if len(g.recentUpstreams) == 0 || g.recentUpstreams[len(g.recentUpstreams)-1] != masked {
-		g.recentUpstreams = append(g.recentUpstreams, masked)
+	e.lastUpstream.Store(masked)
+	if len(e.recentUpstreams) == 0 || e.recentUpstreams[len(e.recentUpstreams)-1] != masked {
+		e.recentUpstreams = append(e.recentUpstreams, masked)
 	}
-	if len(g.recentUpstreams) > 8 {
-		g.recentUpstreams = append([]string{}, g.recentUpstreams[len(g.recentUpstreams)-8:]...)
+	if len(e.recentUpstreams) > 8 {
+		e.recentUpstreams = append([]string{}, e.recentUpstreams[len(e.recentUpstreams)-8:]...)
 	}
 }
 
-func (g *gatewayServer) recentSnapshot() []string {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	out := make([]string, len(g.recentUpstreams))
-	copy(out, g.recentUpstreams)
+func (e *gatewayEndpoint) recentSnapshot() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, len(e.recentUpstreams))
+	copy(out, e.recentUpstreams)
 	return out
 }
 
-func (g *gatewayServer) handleSocks5Conn(client net.Conn) {
-	atomic.AddInt64(&g.totalRequests, 1)
+func (g *gatewayServer) handleSocks5Conn(client net.Conn, endpoint *gatewayEndpoint) {
+	atomic.AddInt64(&endpoint.totalRequests, 1)
 	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
 	target, err := socks5Handshake(client)
 	if err != nil {
 		_ = client.Close()
-		g.recordFailure("", err)
+		endpoint.recordFailure("", err)
 		return
 	}
-	upstream, err := g.selectUpstream()
+	upstream, err := g.selectUpstream(endpoint)
 	if err != nil {
 		_ = writeSocks5Reply(client, 0x01)
 		_ = client.Close()
-		g.recordFailure("", err)
+		endpoint.recordFailure("", err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.cfg.RequestTimeoutS)*time.Second)
@@ -289,18 +385,32 @@ func (g *gatewayServer) handleSocks5Conn(client net.Conn) {
 	if err != nil {
 		_ = writeSocks5Reply(client, 0x05)
 		_ = client.Close()
-		g.recordFailure(upstream, err)
+		endpoint.recordFailure(upstream, err)
 		return
 	}
 	if err := writeSocks5Reply(client, 0x00); err != nil {
 		_ = client.Close()
 		_ = upstreamConn.Close()
-		g.recordFailure(upstream, err)
+		endpoint.recordFailure(upstream, err)
 		return
 	}
 	_ = client.SetDeadline(time.Time{})
-	g.recordSuccess(upstream)
+	endpoint.recordSuccess(upstream)
 	pipeBidirectional(client, upstreamConn)
+}
+
+func gatewayProfilePortForProfile(profile string, base int, index int, profilePorts map[string]int, stride int) int {
+	if port := profilePorts[strings.ToLower(strings.TrimSpace(profile))]; port > 0 {
+		return port
+	}
+	if base <= 0 {
+		return 0
+	}
+	port := base + index*stride
+	if port > 65535 {
+		return 0
+	}
+	return port
 }
 
 func socks5Handshake(conn net.Conn) (string, error) {
