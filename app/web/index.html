@@ -9,9 +9,12 @@
   <body>
     <main id="loginView" class="login-view" hidden>
       <form id="loginForm" class="login-panel">
-        <div>
-          <h1>ProxyLiteChecker</h1>
-          <p>单机代理检测与本机代理网关</p>
+        <div class="login-brand">
+          <span class="brand-mark">P</span>
+          <div>
+            <h1>ProxyLiteChecker</h1>
+            <p>单机代理池</p>
+          </div>
         </div>
         <label>
           用户名
@@ -21,159 +24,184 @@
           密码
           <input id="password" type="password" autocomplete="current-password" />
         </label>
-        <button type="submit">登录</button>
+        <button type="submit" data-label="登录">登录</button>
         <div id="loginError" class="error-text"></div>
       </form>
     </main>
 
     <main id="appView" class="app-shell" hidden>
-      <aside class="sidebar">
+      <header class="workspace-header">
         <div class="brand">
           <span class="brand-mark">P</span>
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small id="versionText">v0.1.0</small>
+            <small id="versionText">v0.1.1</small>
           </div>
         </div>
-        <nav>
-          <a href="#dashboard" class="active">概览</a>
-          <a href="#sources">代理源</a>
-          <a href="#proxies">代理仓库</a>
-          <a href="#gateway">本机网关</a>
-        </nav>
-        <button id="logoutBtn" class="secondary full">退出登录</button>
-      </aside>
+        <div class="header-status">
+          <span id="gatewayPill" class="status-pill">网关未连接</span>
+          <button id="refreshBtn" class="secondary" data-label="刷新">刷新</button>
+          <button id="logoutBtn" class="ghost" data-label="退出">退出</button>
+        </div>
+      </header>
 
-      <section class="content">
-        <header class="topbar">
-          <div>
-            <h1>本机代理池</h1>
-            <p>当前机器视角下的拉取、检测、导出和网关状态</p>
-          </div>
-          <button id="refreshBtn" class="secondary">刷新</button>
-        </header>
+      <section class="metric-grid" aria-label="代理统计">
+        <article class="metric">
+          <span>总数</span>
+          <strong id="statTotal">0</strong>
+        </article>
+        <article class="metric success">
+          <span>可用</span>
+          <strong id="statAvailable">0</strong>
+        </article>
+        <article class="metric warning">
+          <span>待检</span>
+          <strong id="statUntested">0</strong>
+        </article>
+        <article class="metric danger">
+          <span>失败</span>
+          <strong id="statFailed">0</strong>
+        </article>
+      </section>
 
-        <section id="dashboard" class="section">
-          <div class="metric-grid">
-            <article class="metric"><span>总数</span><strong id="statTotal">0</strong></article>
-            <article class="metric"><span>可用</span><strong id="statAvailable">0</strong></article>
-            <article class="metric"><span>待检</span><strong id="statUntested">0</strong></article>
-            <article class="metric"><span>失败</span><strong id="statFailed">0</strong></article>
-          </div>
-
-          <div class="panel task-panel">
-            <div class="panel-head">
-              <div>
-                <h2>实时任务</h2>
-                <p id="taskSubtitle">暂无运行任务</p>
-              </div>
-              <button id="cancelJobBtn" class="secondary" disabled>停止任务</button>
+      <section class="workbench">
+        <section class="panel action-panel">
+          <div class="panel-head">
+            <div>
+              <h2>快速操作</h2>
+              <p id="sourceCountText">0 个代理源</p>
             </div>
-            <div class="progress">
-              <span id="progressBar"></span>
-            </div>
-            <div id="jobMessage" class="job-message">等待操作</div>
+          </div>
+          <div class="action-grid">
+            <button id="fetchSourcesBtn" class="action-button" data-label="拉取代理源">
+              <strong>拉取代理源</strong>
+              <span>选中源导入本地仓库</span>
+            </button>
+            <button id="runCheckBtn" class="action-button accent" data-label="本机检测">
+              <strong>本机检测</strong>
+              <span>按当前筛选检测代理</span>
+            </button>
+            <a class="action-button link" href="/api/export/proxies.txt" target="_blank">
+              <strong>TXT 导出</strong>
+              <span>仅输出可用代理</span>
+            </a>
+            <a class="action-button link" href="/api/export/proxies.json" target="_blank">
+              <strong>JSON 导出</strong>
+              <span>包含检测元数据</span>
+            </a>
           </div>
         </section>
 
-        <section id="sources" class="section grid-2">
-          <div class="panel">
-            <div class="panel-head">
-              <div>
-                <h2>代理源</h2>
-                <p>选择代理源后拉取并去重导入</p>
-              </div>
-              <button id="fetchSourcesBtn">拉取选中</button>
+        <section class="panel task-panel">
+          <div class="panel-head">
+            <div>
+              <h2>实时任务</h2>
+              <p id="taskSubtitle">空闲</p>
             </div>
-            <div class="control-row">
-              <button id="selectAllSources" class="secondary">全选</button>
-              <button id="clearSources" class="secondary">清空</button>
+            <button id="cancelJobBtn" class="secondary" data-label="停止" disabled>停止</button>
+          </div>
+          <div class="progress">
+            <span id="progressBar"></span>
+          </div>
+          <div id="jobMessage" class="job-message">等待操作</div>
+        </section>
+      </section>
+
+      <section class="content-grid">
+        <section class="panel sources-panel">
+          <div class="panel-head wrap">
+            <div>
+              <h2>代理源</h2>
+              <p id="selectedSourcesText">已选 0 个</p>
+            </div>
+            <div class="inline-actions">
+              <button id="selectAllSources" class="secondary" data-label="全选">全选</button>
+              <button id="clearSources" class="secondary" data-label="清空">清空</button>
               <label class="compact-label">
                 单源上限
                 <input id="sourceLimit" type="number" min="0" max="50000" value="0" />
               </label>
             </div>
-            <div id="sourcesList" class="source-list"></div>
           </div>
-
-          <div class="panel">
-            <div class="panel-head">
-              <div>
-                <h2>手动导入</h2>
-                <p>支持 http、https、socks4、socks5 和无前缀代理</p>
-              </div>
-              <button id="importBtn">导入</button>
-            </div>
-            <textarea id="importText" spellcheck="false" placeholder="http://1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;9.9.9.9:3128"></textarea>
-            <div id="importResult" class="muted"></div>
-          </div>
+          <div id="sourcesList" class="source-list"></div>
         </section>
 
-        <section id="proxies" class="section panel">
-          <div class="panel-head wrap">
+        <section class="panel import-panel">
+          <div class="panel-head">
             <div>
-              <h2>代理仓库</h2>
-              <p>本地 SQLite 中的代理库存和最新检测结果</p>
+              <h2>手动导入</h2>
+              <p id="importResult">等待输入</p>
             </div>
-            <div class="toolbar">
-              <select id="proxyStatus">
-                <option value="all">全部</option>
-                <option value="available">可用</option>
-                <option value="untested">待检</option>
-                <option value="failed">失败</option>
-              </select>
-              <select id="targetProfile">
-                <option value="generic">常规</option>
-                <option value="openai">OpenAI</option>
-                <option value="grok">Grok</option>
-                <option value="gemini">Gemini</option>
-                <option value="claude">Claude</option>
-              </select>
-              <input id="proxySearch" placeholder="搜索 IP / 来源" />
-              <button id="runCheckBtn">本机检测</button>
-              <button id="deleteFailedBtn" class="danger secondary">清理失败</button>
-            </div>
+            <button id="importBtn" data-label="导入">导入</button>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>代理</th>
-                  <th>状态</th>
-                  <th>等级</th>
-                  <th>延迟</th>
-                  <th>出口</th>
-                  <th>用途</th>
-                  <th>来源</th>
-                  <th>更新时间</th>
-                </tr>
-              </thead>
-              <tbody id="proxyRows"></tbody>
-            </table>
-          </div>
+          <textarea id="importText" spellcheck="false" placeholder="http://1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;9.9.9.9:3128"></textarea>
         </section>
+      </section>
 
-        <section id="gateway" class="section grid-2">
-          <div class="panel">
-            <h2>本机 HTTP 网关</h2>
-            <div class="info-grid">
-              <span>地址</span><strong id="gatewayBind">-</strong>
-              <span>可用上游</span><strong id="gatewayUpstreams">0</strong>
-              <span>请求数</span><strong id="gatewayTotal">0</strong>
-              <span>成功率</span><strong id="gatewayRate">0%</strong>
-            </div>
+      <section class="panel proxies-panel">
+        <div class="panel-head wrap">
+          <div>
+            <h2>代理仓库</h2>
+            <p id="proxyTableSummary">0 条记录</p>
           </div>
-          <div class="panel">
-            <h2>导出链接</h2>
-            <div class="export-links">
-              <a href="/api/export/proxies.txt" target="_blank">TXT 导出</a>
-              <a href="/api/export/proxies.json" target="_blank">JSON 导出</a>
-            </div>
+          <div class="toolbar">
+            <select id="proxyStatus">
+              <option value="all">全部</option>
+              <option value="available">可用</option>
+              <option value="untested">待检</option>
+              <option value="failed">失败</option>
+            </select>
+            <select id="targetProfile">
+              <option value="generic">常规</option>
+              <option value="openai">OpenAI</option>
+              <option value="grok">Grok</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+            </select>
+            <input id="proxySearch" placeholder="搜索 IP / 来源" />
+            <button id="deleteFailedBtn" class="danger secondary" data-label="清理失败">清理失败</button>
           </div>
-        </section>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>代理</th>
+                <th>状态</th>
+                <th>等级</th>
+                <th>延迟</th>
+                <th>出口</th>
+                <th>用途</th>
+                <th>来源</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody id="proxyRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="gateway-strip">
+        <article>
+          <span>网关地址</span>
+          <strong id="gatewayBind">-</strong>
+        </article>
+        <article>
+          <span>可用上游</span>
+          <strong id="gatewayUpstreams">0</strong>
+        </article>
+        <article>
+          <span>请求数</span>
+          <strong id="gatewayTotal">0</strong>
+        </article>
+        <article>
+          <span>成功率</span>
+          <strong id="gatewayRate">0%</strong>
+        </article>
       </section>
     </main>
 
+    <div id="toastHost" class="toast-host" aria-live="polite"></div>
     <script src="/static/app.js"></script>
   </body>
 </html>

@@ -3,6 +3,7 @@ const state = {
   sources: [],
   activeJob: null,
   pollTimer: null,
+  sourceSelected: 0,
 };
 
 const el = (id) => document.getElementById(id);
@@ -43,11 +44,6 @@ function pct(done, total) {
   return Math.max(0, Math.min(100, Math.round((done / total) * 100)));
 }
 
-function statusTag(status) {
-  const text = { available: "可用", failed: "失败", untested: "待检", checking: "检测中" }[status] || status;
-  return `<span class="tag ${escapeHtml(status)}">${escapeHtml(text)}</span>`;
-}
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -57,29 +53,69 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function statusTag(status) {
+  const text = { available: "可用", failed: "失败", untested: "待检", checking: "检测中" }[status] || status;
+  return `<span class="tag ${escapeHtml(status)}">${escapeHtml(text)}</span>`;
+}
+
 function proxyUrl(item) {
   const protocol = item.detected_protocol || item.protocol || "http";
   const auth = item.username ? `${item.username}:***@` : "";
   return `${protocol}://${auth}${item.ip}:${item.port}`;
 }
 
+function toast(message, type = "info") {
+  const host = el("toastHost");
+  const item = document.createElement("div");
+  item.className = `toast ${type}`;
+  item.textContent = message;
+  host.appendChild(item);
+  setTimeout(() => item.remove(), 3200);
+}
+
+function setBusy(button, busy, label) {
+  if (!button) return;
+  if (!button.dataset.originalHtml) {
+    button.dataset.originalHtml = button.innerHTML;
+  }
+  button.classList.toggle("is-loading", busy);
+  button.disabled = busy;
+  if (busy) {
+    button.textContent = label || "处理中";
+  } else {
+    button.innerHTML = button.dataset.originalHtml;
+  }
+}
+
+async function withButton(button, label, task) {
+  setBusy(button, true, label);
+  try {
+    return await task();
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 async function login(event) {
   event.preventDefault();
   el("loginError").textContent = "";
-  try {
-    const payload = await api("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({
-        username: el("username").value.trim(),
-        password: el("password").value,
-      }),
-    });
-    state.token = payload.access_token;
-    localStorage.setItem("plc_token", state.token);
-    await bootstrap();
-  } catch (error) {
-    el("loginError").textContent = error.message;
-  }
+  await withButton(event.submitter, "登录中", async () => {
+    try {
+      const payload = await api("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: el("username").value.trim(),
+          password: el("password").value,
+        }),
+      });
+      state.token = payload.access_token;
+      localStorage.setItem("plc_token", state.token);
+      await bootstrap();
+      toast("登录成功", "success");
+    } catch (error) {
+      el("loginError").textContent = error.message;
+    }
+  });
 }
 
 async function bootstrap() {
@@ -102,6 +138,7 @@ function renderStats(stats) {
 }
 
 function renderSources() {
+  el("sourceCountText").textContent = `${state.sources.length} 个代理源`;
   el("sourcesList").innerHTML = state.sources
     .map(
       (source) => `
@@ -112,27 +149,42 @@ function renderSources() {
       `,
     )
     .join("");
+  document.querySelectorAll(".source-check").forEach((input) => {
+    input.addEventListener("change", updateSelectedSources);
+  });
+  updateSelectedSources();
+}
+
+function updateSelectedSources() {
+  state.sourceSelected = document.querySelectorAll(".source-check:checked").length;
+  el("selectedSourcesText").textContent = `已选 ${state.sourceSelected} 个`;
 }
 
 function renderGateway(gateway) {
-  el("gatewayBind").textContent = gateway.enabled ? gateway.bind || `${gateway.host}:${gateway.port}` : "未启用";
-  el("gatewayUpstreams").textContent = gateway.upstreams || 0;
+  const bind = gateway.enabled ? gateway.bind || `${gateway.host}:${gateway.port}` : "未启用";
+  const upstreams = gateway.upstreams || 0;
+  el("gatewayBind").textContent = bind;
+  el("gatewayUpstreams").textContent = upstreams;
   el("gatewayTotal").textContent = gateway.total_requests || 0;
   el("gatewayRate").textContent = `${Math.round((gateway.success_rate || 0) * 100)}%`;
+  const pill = el("gatewayPill");
+  pill.textContent = gateway.enabled ? `${bind} · ${upstreams} 上游` : "网关未启用";
+  pill.classList.toggle("offline", !gateway.enabled);
 }
 
 function renderJobs(jobs) {
   const job = jobs.find((item) => item.status === "running") || jobs[0] || null;
   state.activeJob = job;
   if (!job) {
-    el("taskSubtitle").textContent = "暂无运行任务";
+    el("taskSubtitle").textContent = "空闲";
     el("jobMessage").textContent = "等待操作";
     el("progressBar").style.width = "0%";
     el("cancelJobBtn").disabled = true;
     return;
   }
   const percent = pct(job.done, job.total);
-  el("taskSubtitle").textContent = `${job.type} ${job.status}：${job.done}/${job.total}`;
+  const typeText = { fetch: "拉取", check: "检测" }[job.type] || job.type;
+  el("taskSubtitle").textContent = `${typeText} · ${job.status} · ${job.done}/${job.total}`;
   el("jobMessage").textContent = `${job.message || ""} ${percent}%`;
   el("progressBar").style.width = `${percent}%`;
   el("cancelJobBtn").disabled = job.status !== "running";
@@ -162,6 +214,7 @@ async function loadProxies() {
   });
   const payload = await api(`/api/proxies?${params}`);
   const rows = payload.items || [];
+  el("proxyTableSummary").textContent = `${payload.total || rows.length} 条记录`;
   el("proxyRows").innerHTML =
     rows
       .map(
@@ -178,42 +231,59 @@ async function loadProxies() {
           </tr>
         `,
       )
-      .join("") || `<tr><td colspan="8" class="muted">暂无代理</td></tr>`;
+      .join("") || `<tr><td colspan="8" class="empty-row">暂无代理</td></tr>`;
 }
 
-async function fetchSources() {
-  const ids = [...document.querySelectorAll(".source-check:checked")].map((input) => input.value);
-  const limit = Number(el("sourceLimit").value || 0);
-  const payload = await api("/api/sources/fetch-job", {
-    method: "POST",
-    body: JSON.stringify({ source_ids: ids, limit_per_source: limit }),
+async function fetchSources(event) {
+  if (state.sourceSelected === 0) {
+    toast("请至少选择一个代理源", "error");
+    return;
+  }
+  await withButton(event.currentTarget, "拉取中", async () => {
+    const ids = [...document.querySelectorAll(".source-check:checked")].map((input) => input.value);
+    const limit = Number(el("sourceLimit").value || 0);
+    const payload = await api("/api/sources/fetch-job", {
+      method: "POST",
+      body: JSON.stringify({ source_ids: ids, limit_per_source: limit }),
+    });
+    toast("拉取任务已开始", "success");
+    await watchJob(payload.job_id);
   });
-  await watchJob(payload.job_id);
 }
 
-async function importProxies() {
-  const text = el("importText").value;
-  const result = await api("/api/proxies/import", {
-    method: "POST",
-    body: JSON.stringify({ text, source: "manual", default_protocol: "auto" }),
+async function importProxies(event) {
+  const text = el("importText").value.trim();
+  if (!text) {
+    toast("没有可导入内容", "error");
+    return;
+  }
+  await withButton(event.currentTarget, "导入中", async () => {
+    const result = await api("/api/proxies/import", {
+      method: "POST",
+      body: JSON.stringify({ text, source: "manual", default_protocol: "auto" }),
+    });
+    el("importResult").textContent = `新增 ${result.added}，更新 ${result.updated}`;
+    el("importText").value = "";
+    toast("导入完成", "success");
+    await refreshAll();
   });
-  el("importResult").textContent = `新增 ${result.added}，更新 ${result.updated}`;
-  el("importText").value = "";
-  await refreshAll();
 }
 
-async function runCheck() {
-  const payload = await api("/api/checks/run-job", {
-    method: "POST",
-    body: JSON.stringify({
-      status: el("proxyStatus").value === "all" ? "untested" : el("proxyStatus").value,
-      target_profile: el("targetProfile").value,
-      limit: 500,
-      concurrent: 30,
-      rounds: 1,
-    }),
+async function runCheck(event) {
+  await withButton(event.currentTarget, "检测中", async () => {
+    const payload = await api("/api/checks/run-job", {
+      method: "POST",
+      body: JSON.stringify({
+        status: el("proxyStatus").value === "all" ? "untested" : el("proxyStatus").value,
+        target_profile: el("targetProfile").value,
+        limit: 500,
+        concurrent: 30,
+        rounds: 1,
+      }),
+    });
+    toast(`检测任务已开始：${payload.count || 0} 条`, "success");
+    await watchJob(payload.job_id);
   });
-  await watchJob(payload.job_id);
 }
 
 async function watchJob(jobId) {
@@ -233,23 +303,30 @@ function startPolling() {
         await loadProxies();
         clearInterval(state.pollTimer);
         state.pollTimer = null;
+        toast("任务已完成", "success");
       }
     } catch (error) {
-      console.warn(error);
+      toast(error.message, "error");
     }
   }, 1200);
 }
 
-async function cancelJob() {
+async function cancelJob(event) {
   if (!state.activeJob) return;
-  await api(`/api/jobs/${state.activeJob.id}/cancel`, { method: "POST" });
-  await refreshAll();
+  await withButton(event.currentTarget, "停止中", async () => {
+    await api(`/api/jobs/${state.activeJob.id}/cancel`, { method: "POST" });
+    toast("已请求停止任务", "success");
+    await refreshAll();
+  });
 }
 
-async function deleteFailed() {
+async function deleteFailed(event) {
   if (!confirm("确认删除所有失败代理？")) return;
-  await api("/api/proxies/by-status?status=failed", { method: "DELETE" });
-  await refreshAll();
+  await withButton(event.currentTarget, "清理中", async () => {
+    const result = await api("/api/proxies/by-status?status=failed", { method: "DELETE" });
+    toast(`已清理 ${result.deleted || 0} 条失败代理`, "success");
+    await refreshAll();
+  });
 }
 
 async function refreshAll() {
@@ -266,17 +343,19 @@ function bindEvents() {
     state.token = "";
     showLogin();
   });
-  el("refreshBtn").addEventListener("click", refreshAll);
+  el("refreshBtn").addEventListener("click", (event) => withButton(event.currentTarget, "刷新中", refreshAll));
   el("fetchSourcesBtn").addEventListener("click", fetchSources);
   el("selectAllSources").addEventListener("click", () => {
     document.querySelectorAll(".source-check").forEach((item) => {
       item.checked = true;
     });
+    updateSelectedSources();
   });
   el("clearSources").addEventListener("click", () => {
     document.querySelectorAll(".source-check").forEach((item) => {
       item.checked = false;
     });
+    updateSelectedSources();
   });
   el("importBtn").addEventListener("click", importProxies);
   el("runCheckBtn").addEventListener("click", runCheck);
