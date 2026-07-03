@@ -36,6 +36,9 @@ Default web address:
 http://127.0.0.1:8899
 ```
 
+Project timestamps and runtime scheduling displays use Beijing time
+(`Asia/Shanghai`).
+
 Default target gateway ports:
 
 ```text

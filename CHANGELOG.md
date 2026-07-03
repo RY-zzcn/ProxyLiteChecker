@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - 2026-07-03
+
+- Mark time units beside runtime settings and standardize project timestamps on Beijing time.
+- Make fetch/check job creation atomic so manual and automatic jobs cannot race into concurrent heavy work.
+- Add tests for job conflict scheduling, target gateway round-robin upstream selection, import deduplication, stale cleanup, and Beijing time formatting.
+- Update Docker exposure and documentation for the completed lightweight single-machine release.
+
 ## 0.1.13 - 2026-07-03
 
 - Keep quick action buttons from turning blue on hover and align source fetching with the local-check action style.

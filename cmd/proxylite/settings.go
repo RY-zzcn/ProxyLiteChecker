@@ -118,7 +118,7 @@ func (s *store) EnsureSettingsSchema() error {
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
 );
 `)
 	return err
@@ -148,8 +148,8 @@ func (s *store) SaveAppSettings(settings appSettings) (appSettings, error) {
 	}
 	_, err = s.db.Exec(`
 INSERT INTO app_settings (key, value, updated_at)
-VALUES (?, ?, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+VALUES (?, ?, datetime('now', '+8 hours'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now', '+8 hours')`,
 		appSettingsKey, string(raw))
 	return settings, err
 }
@@ -317,7 +317,7 @@ func (sc *scheduler) tick() {
 		sc.setError(err)
 		return
 	}
-	now := time.Now()
+	now := beijingNow()
 	sc.tickMaintenance(settings, now)
 	sc.tickFetch(settings, now)
 	sc.tickCheck(settings, now)
@@ -442,7 +442,7 @@ func (sc *scheduler) tickCheck(settings appSettings, now time.Time) {
 }
 
 func (sc *scheduler) Reset(settings appSettings) {
-	now := time.Now()
+	now := beijingNow()
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if settings.AutoFetchEnabled {
@@ -549,8 +549,5 @@ func (sc *scheduler) setError(err error) {
 }
 
 func formatTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
-	}
-	return value.UTC().Format(time.RFC3339)
+	return formatBeijingTime(value)
 }

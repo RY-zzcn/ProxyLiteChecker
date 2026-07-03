@@ -23,6 +23,7 @@ ProxyLiteChecker 是 ProxyPoolChecker 的单机轻量版本。它没有面板和
 docker run -d --name proxylitechecker \
   -p 8899:8899 \
   -p 18080-18089:18080-18089 \
+  -e TZ=Asia/Shanghai \
   -e ADMIN_PASSWORD='请改成强密码' \
   -e SECRET_KEY='请改成强随机字符串' \
   -v proxylite-data:/app/data \
@@ -69,6 +70,8 @@ SECRET_KEY=请改成强随机字符串
 
 自动任务和检测参数保存在 SQLite 中，重启后仍会保留：
 
+项目时间统一使用北京时间 `Asia/Shanghai`。界面中的时间输入会在输入框右侧显示单位：`min` 为分钟，`h` 为小时，`s` 为秒。
+
 | 设置 | 说明 |
 | --- | --- |
 | 自动拉取 | 按间隔拉取当前选中的代理源，空选择表示全部内置源 |
@@ -102,8 +105,8 @@ ghcr.io/ry-zzcn/proxylitechecker
 | 标签 | 说明 |
 | --- | --- |
 | `latest` | `main` 分支最新镜像 |
-| `v0.1.13` / 其它 `v*` | 对应版本镜像 |
-| `0.1` | `0.1.x` 小版本线最新镜像，会随 `v0.1.13`、后续 `v0.1.14` 等自动前移 |
+| `v0.2.0` / 其它 `v*` | 对应版本镜像 |
+| `0.2` | `0.2.x` 小版本线最新镜像，会随后续 `v0.2.x` 自动前移 |
 
 查看仓库 Packages 页面：
 

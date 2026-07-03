@@ -70,8 +70,21 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+var beijingLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
+
+func beijingNow() time.Time {
+	return time.Now().In(beijingLocation)
+}
+
 func nowString() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return beijingNow().Format(time.RFC3339)
+}
+
+func formatBeijingTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.In(beijingLocation).Format(time.RFC3339)
 }
 
 func randomTokenURLSafe(bytesCount int) (string, error) {

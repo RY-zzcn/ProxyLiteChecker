@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.1.13</span> · 额丶Y</small>
+            <small><span id="versionText">v0.2.0</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -198,7 +198,10 @@
                 <div class="mini-grid">
                   <label>
                     拉取间隔
-                    <input id="autoFetchInterval" type="number" min="5" max="10080" />
+                    <div class="unit-field">
+                      <input id="autoFetchInterval" type="number" min="5" max="10080" />
+                      <span>min</span>
+                    </div>
                   </label>
                   <label>
                     单源上限
@@ -216,7 +219,10 @@
                   </label>
                   <label>
                     补源冷却
-                    <input id="autoFetchCooldown" type="number" min="1" max="1440" />
+                    <div class="unit-field">
+                      <input id="autoFetchCooldown" type="number" min="1" max="1440" />
+                      <span>min</span>
+                    </div>
                   </label>
                 </div>
               </div>
@@ -235,7 +241,10 @@
                 <div class="mini-grid three">
                   <label>
                     检测间隔
-                    <input id="autoCheckInterval" type="number" min="5" max="10080" />
+                    <div class="unit-field">
+                      <input id="autoCheckInterval" type="number" min="5" max="10080" />
+                      <span>min</span>
+                    </div>
                   </label>
                   <label>
                     检测范围
@@ -273,11 +282,17 @@
                   </label>
                   <label>
                     超时
-                    <input id="settingsCheckTimeout" type="number" min="2" max="60" />
+                    <div class="unit-field">
+                      <input id="settingsCheckTimeout" type="number" min="2" max="60" />
+                      <span>s</span>
+                    </div>
                   </label>
                   <label>
                     硬超时
-                    <input id="settingsCheckHardTimeout" type="number" min="2" max="300" />
+                    <div class="unit-field">
+                      <input id="settingsCheckHardTimeout" type="number" min="2" max="300" />
+                      <span>s</span>
+                    </div>
                   </label>
                 </div>
               </div>
@@ -306,11 +321,17 @@
                 <div class="mini-grid">
                   <label>
                     可用有效期
-                    <input id="availableTtlHours" type="number" min="1" max="8760" />
+                    <div class="unit-field">
+                      <input id="availableTtlHours" type="number" min="1" max="8760" />
+                      <span>h</span>
+                    </div>
                   </label>
                   <label>
                     待检有效期
-                    <input id="untestedTtlHours" type="number" min="1" max="8760" />
+                    <div class="unit-field">
+                      <input id="untestedTtlHours" type="number" min="1" max="8760" />
+                      <span>h</span>
+                    </div>
                   </label>
                   <label>
                     每页数量

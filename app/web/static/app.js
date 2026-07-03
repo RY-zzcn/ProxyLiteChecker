@@ -24,7 +24,34 @@ const TARGET_LABELS = {
   all: "全部目标",
 };
 
+const BEIJING_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+  hourCycle: "h23",
+});
+
 const el = (id) => document.getElementById(id);
+
+function formatBeijingDate(date) {
+  const parts = Object.fromEntries(BEIJING_TIME_FORMATTER.formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function displayTimestamp(value, fallback = "-") {
+  if (!value) return fallback;
+  const text = String(value).trim();
+  if (!text) return fallback;
+  const normalized = text.includes("T") ? text : text.replace(" ", "T");
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+  const date = new Date(hasTimezone ? normalized : `${normalized}+08:00`);
+  return Number.isNaN(date.getTime()) ? text : formatBeijingDate(date);
+}
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -325,9 +352,8 @@ function renderSchedulerText(scheduler) {
 
 function displayNextRun(value) {
   if (!value) return "等待排程";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "等待排程";
-  return `下次 ${date.toLocaleString()}`;
+  const text = displayTimestamp(value, "");
+  return text ? `下次 ${text}` : "等待排程";
 }
 
 function updateSelectedSources() {
@@ -472,7 +498,7 @@ async function loadProxies() {
             <td>${escapeHtml(item.exit_ip || "-")} ${item.country ? `<span class="muted">${escapeHtml(item.country)}</span>` : ""}</td>
             <td>${escapeHtml(item.recommended_use || "-")}</td>
             <td>${escapeHtml(item.source || "-")}</td>
-            <td>${escapeHtml(item.last_checked_at || item.updated_at || "-")}</td>
+            <td>${escapeHtml(displayTimestamp(item.last_checked_at || item.updated_at))}</td>
           </tr>
         `,
       )

@@ -66,7 +66,7 @@ func newGatewayServer(store *store, cfg gatewayConfig) *gatewayServer {
 		cfg.ProfilePortStride = 2
 	}
 	profiles := normalizeTargetProfiles(cfg.TargetProfiles)
-	gateway := &gatewayServer{store: store, cfg: cfg, startedAt: time.Now().UTC().Format(time.RFC3339)}
+	gateway := &gatewayServer{store: store, cfg: cfg, startedAt: nowString()}
 	for index, profile := range profiles {
 		endpoint := &gatewayEndpoint{
 			TargetProfile: profile,

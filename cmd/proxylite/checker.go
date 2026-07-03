@@ -87,14 +87,17 @@ var targetProfiles = map[string]TargetProfile{
 }
 
 func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
-	if running := s.jobs.RunningOfTypes("fetch", "check"); running != nil {
+	job, ctx, running := s.jobs.CreateIfNoRunning("check", "准备本机检测", "fetch", "check")
+	if running != nil {
 		return nil, runningJobConflict(running)
 	}
 	settings, err := s.store.AppSettings()
 	if err != nil {
+		s.jobs.fail(job.ID, err)
 		return nil, err
 	}
 	if _, _, _, err := s.applyProxyMaintenance(settings); err != nil {
+		s.jobs.fail(job.ID, err)
 		return nil, err
 	}
 	fallbackProfiles := settings.CheckTargetProfiles
@@ -116,12 +119,12 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	for _, profile := range targetProfiles {
 		items, err := s.store.ListCheckCandidates(status, cfg.Limit, profile)
 		if err != nil {
+			s.jobs.fail(job.ID, err)
 			return nil, err
 		}
 		plans = append(plans, checkPlan{TargetProfile: profile, Items: items})
 		total += len(items)
 	}
-	job, ctx := s.jobs.Create("check", "准备本机检测")
 	s.jobs.Update(job.ID, map[string]any{
 		"total":   total,
 		"message": fmt.Sprintf("本机检测排队：%d 条 / %d 个目标", total, len(targetProfiles)),

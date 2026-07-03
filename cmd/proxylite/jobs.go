@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
-	"time"
 )
 
 type jobManager struct {
@@ -37,9 +36,23 @@ func newJobManager() *jobManager {
 func (m *jobManager) Create(jobType string, message string) (*jobState, context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.createLocked(jobType, message)
+}
+
+func (m *jobManager) CreateIfNoRunning(jobType string, message string, blockingTypes ...string) (*jobState, context.Context, *jobState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if running := m.runningOfTypesLocked(blockingTypes...); running != nil {
+		return nil, nil, cloneJob(running)
+	}
+	job, ctx := m.createLocked(jobType, message)
+	return job, ctx, nil
+}
+
+func (m *jobManager) createLocked(jobType string, message string) (*jobState, context.Context) {
 	m.nextID++
 	ctx, cancel := context.WithCancel(context.Background())
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowString()
 	job := &jobState{
 		ID:        strconv.FormatInt(m.nextID, 10),
 		Type:      jobType,
@@ -67,6 +80,13 @@ func (m *jobManager) TypeRunning(jobType string) bool {
 func (m *jobManager) RunningOfTypes(jobTypes ...string) *jobState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if running := m.runningOfTypesLocked(jobTypes...); running != nil {
+		return cloneJob(running)
+	}
+	return nil
+}
+
+func (m *jobManager) runningOfTypesLocked(jobTypes ...string) *jobState {
 	allowed := map[string]bool{}
 	for _, jobType := range jobTypes {
 		allowed[jobType] = true
@@ -113,7 +133,7 @@ func (m *jobManager) Update(id string, patch map[string]any) (*jobState, bool) {
 	if value, ok := patch["result"].(map[string]any); ok {
 		job.Result = value
 	}
-	job.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	job.UpdatedAt = nowString()
 	return cloneJob(job), true
 }
 
@@ -150,7 +170,7 @@ func (m *jobManager) Cancel(id string) (*jobState, bool) {
 	if job.Status == "running" {
 		job.Status = "cancelled"
 		job.Message = "任务已请求停止"
-		job.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		job.UpdatedAt = nowString()
 		job.cancel = nil
 	}
 	out := cloneJob(job)

@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,
   password_hash TEXT NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
 );
 CREATE TABLE IF NOT EXISTS proxies (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,8 +164,8 @@ CREATE TABLE IF NOT EXISTS proxies (
   last_error TEXT,
   failure_count INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   last_checked_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status);
@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS proxy_checks (
   recommended_use TEXT NOT NULL DEFAULT '',
   last_error TEXT,
   checked_at TEXT,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   PRIMARY KEY (proxy_id, target_profile),
   FOREIGN KEY (proxy_id) REFERENCES proxies(id) ON DELETE CASCADE
 );
@@ -215,7 +215,7 @@ WHERE last_checked_at IS NOT NULL AND target_profile != '';
 	}
 	if count == 0 {
 		_, err := s.db.Exec(
-			"INSERT INTO users (username, password_hash, created_at, updated_at) VALUES (?, ?, datetime('now'), datetime('now'))",
+			"INSERT INTO users (username, password_hash, created_at, updated_at) VALUES (?, ?, datetime('now', '+8 hours'), datetime('now', '+8 hours'))",
 			username,
 			hashPassword(firstNonEmpty(adminPassword, defaultAdminPassword)),
 		)
@@ -327,13 +327,13 @@ func (s *store) upsertProxy(tx *sql.Tx, proxy parsedProxy, source string) (bool,
 	if exists == 0 {
 		_, err := tx.Exec(`
 INSERT INTO proxies (proxy_key, ip, port, protocol, username, password, source, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, 'untested', datetime('now'), datetime('now'))`,
+VALUES (?, ?, ?, ?, ?, ?, ?, 'untested', datetime('now', '+8 hours'), datetime('now', '+8 hours'))`,
 			key, proxy.Host, proxy.Port, proxy.Protocol, username, password, firstNonEmpty(source, "manual"))
 		return true, err
 	}
 	_, err := tx.Exec(`
 UPDATE proxies
-SET source = ?, username = ?, password = ?, updated_at = datetime('now')
+SET source = ?, username = ?, password = ?, updated_at = datetime('now', '+8 hours')
 WHERE proxy_key = ?`,
 		firstNonEmpty(source, "manual"), username, password, key)
 	return false, err
@@ -588,8 +588,8 @@ SET status = ?,
     recommended_use = ?,
     last_error = ?,
     failure_count = `+failureExpr+`,
-    updated_at = datetime('now'),
-    last_checked_at = datetime('now')
+    updated_at = datetime('now', '+8 hours'),
+    last_checked_at = datetime('now', '+8 hours')
 WHERE id = ?`,
 		status,
 		result.Grade,
@@ -620,7 +620,7 @@ INSERT INTO proxy_checks (
   success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
   recommended_use, last_error, checked_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'), datetime('now', '+8 hours'))
 ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
   status = excluded.status,
   grade = excluded.grade,
@@ -684,7 +684,7 @@ func (s *store) DeleteExpiredUntested(ttlHours int) (int64, error) {
 DELETE FROM proxies
 WHERE enabled = 1
   AND status = 'untested'
-  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', ?)`,
+  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', '+8 hours', ?)`,
 		fmt.Sprintf("-%d hours", ttlHours),
 	)
 	if err != nil {
@@ -698,9 +698,9 @@ func (s *store) RequeueExpiredAvailable(ttlHours int) (int64, error) {
 	targetResult, err := s.db.Exec(`
 UPDATE proxy_checks
 SET status = 'untested',
-    updated_at = datetime('now')
+    updated_at = datetime('now', '+8 hours')
 WHERE status = 'available'
-  AND COALESCE(checked_at, updated_at) <= datetime('now', ?)`,
+  AND COALESCE(checked_at, updated_at) <= datetime('now', '+8 hours', ?)`,
 		fmt.Sprintf("-%d hours", ttlHours),
 	)
 	if err != nil {
@@ -709,10 +709,10 @@ WHERE status = 'available'
 	result, err := s.db.Exec(`
 UPDATE proxies
 SET status = 'untested',
-    updated_at = datetime('now')
+    updated_at = datetime('now', '+8 hours')
 WHERE enabled = 1
   AND status = 'available'
-  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', ?)`,
+  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', '+8 hours', ?)`,
 		fmt.Sprintf("-%d hours", ttlHours),
 	)
 	if err != nil {

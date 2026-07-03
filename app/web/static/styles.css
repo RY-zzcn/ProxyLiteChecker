@@ -688,6 +688,26 @@ textarea {
   min-width: 0;
 }
 
+.unit-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.unit-field span {
+  min-width: 34px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #eef3f8;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .quick-param-grid .target-group label,
 .mini-grid .target-group label {
   display: inline-flex;

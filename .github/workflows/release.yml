@@ -106,6 +106,7 @@ jobs:
             docker run -d --name proxylitechecker \
               -p 8899:8899 \
               -p 18080-18089:18080-18089 \
+              -e TZ=Asia/Shanghai \
               -e ADMIN_PASSWORD='请改成强密码' \
               -e SECRET_KEY='请改成强随机字符串' \
               -v proxylite-data:/app/data \

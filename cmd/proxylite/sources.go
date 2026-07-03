@@ -69,10 +69,10 @@ func sourceMap() map[string]sourceOption {
 }
 
 func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, error) {
-	if running := s.jobs.RunningOfTypes("fetch", "check"); running != nil {
+	job, ctx, running := s.jobs.CreateIfNoRunning("fetch", "准备拉取代理源", "fetch", "check")
+	if running != nil {
 		return nil, runningJobConflict(running)
 	}
-	job, ctx := s.jobs.Create("fetch", "准备拉取代理源")
 	sourceIDs := anyToStringSlice(payload["source_ids"])
 	limitPerSource := anyToInt(payload["limit_per_source"])
 	if limitPerSource < 0 {

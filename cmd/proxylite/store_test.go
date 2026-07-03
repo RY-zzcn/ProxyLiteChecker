@@ -130,8 +130,8 @@ func TestDeleteExpiredUntestedOnlyDeletesOldUntested(t *testing.T) {
 	}
 	if _, err := st.db.Exec(`
 UPDATE proxies
-SET created_at = datetime('now', '-4 hours'),
-    updated_at = datetime('now', '-4 hours')
+SET created_at = datetime('now', '+8 hours', '-4 hours'),
+    updated_at = datetime('now', '+8 hours', '-4 hours')
 WHERE proxy_key = 'http://1.2.3.4:8080'`); err != nil {
 		t.Fatalf("age proxy: %v", err)
 	}

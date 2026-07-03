@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	appVersion           = "0.1.13"
+	appVersion           = "0.2.0"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -268,7 +268,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"access_token": token,
 		"token_type":   "bearer",
-		"expires_at":   expiresAt.UTC().Format(time.RFC3339),
+		"expires_at":   formatBeijingTime(expiresAt),
 	})
 }
 
@@ -590,7 +590,7 @@ func (s *server) usernameFromRequest(r *http.Request) string {
 }
 
 func (s *server) signToken(username string) (string, time.Time, error) {
-	expiresAt := time.Now().Add(time.Duration(s.cfg.AccessTokenMinutes) * time.Minute)
+	expiresAt := beijingNow().Add(time.Duration(s.cfg.AccessTokenMinutes) * time.Minute)
 	payload := map[string]any{
 		"sub": strings.TrimSpace(username),
 		"exp": expiresAt.Unix(),
