@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.11 - 2026-07-03
+
+- Fix GitHub Release instructions for the per-target local gateway ports and Docker port mapping.
+
 ## 0.1.10 - 2026-07-03
 
 - Change the local gateway model to fixed per-target entrances, matching the ProxyPoolChecker gateway pattern without adding node/panel concepts.
