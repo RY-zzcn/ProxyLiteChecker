@@ -24,6 +24,7 @@ type CheckConfig struct {
 	Rounds         int
 	RequestTimeout int
 	HardTimeout    int
+	DeleteFailed   bool
 }
 
 type ProxyTask struct {
@@ -82,6 +83,13 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	if running := s.jobs.RunningOfTypes("fetch", "check"); running != nil {
 		return nil, runningJobConflict(running)
 	}
+	settings, err := s.store.AppSettings()
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := s.applyProxyMaintenance(settings); err != nil {
+		return nil, err
+	}
 	cfg := CheckConfig{
 		TargetProfile:  normalizeTargetProfile(optionalString(payload["target_profile"], "generic")),
 		Limit:          optionalLimit(payload["limit"], 200, 100000),
@@ -89,6 +97,7 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 		Rounds:         optionalLimit(payload["rounds"], 1, 5),
 		RequestTimeout: optionalLimit(payload["request_timeout"], 6, 60),
 		HardTimeout:    optionalLimit(payload["hard_timeout"], 60, 300),
+		DeleteFailed:   settings.DeleteFailedOnCheck,
 	}
 	status := optionalString(payload["status"], "untested")
 	items, err := s.store.ListCheckCandidates(status, cfg.Limit, cfg.TargetProfile)
@@ -109,8 +118,16 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, items []ProxyTas
 	done := 0
 	available := 0
 	failed := 0
+	deletedFailed := 0
 	for result := range checkBatchStream(ctx, items, cfg) {
-		if err := s.store.SaveCheckResult(result); err != nil {
+		if result.Status == "failed" && cfg.DeleteFailed {
+			if err := s.store.DeleteProxyByID(result.ProxyID); err != nil {
+				failed++
+			} else {
+				failed++
+				deletedFailed++
+			}
+		} else if err := s.store.SaveCheckResult(result); err != nil {
 			failed++
 		} else if result.Status == "available" {
 			available++
@@ -124,7 +141,7 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, items []ProxyTas
 				"total":   len(items),
 				"success": available,
 				"failed":  failed,
-				"message": fmt.Sprintf("本机检测进行中：%d/%d，可用 %d，失败 %d", done, len(items), available, failed),
+				"message": checkProgressMessage(done, len(items), available, failed, deletedFailed, cfg.DeleteFailed),
 			})
 		}
 	}
@@ -132,9 +149,23 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, items []ProxyTas
 		s.jobs.finishCancelled(jobID, "本机检测已停止")
 		return
 	}
-	result := map[string]any{"checked": done, "available": available, "failed": failed, "target_profile": cfg.TargetProfile}
+	result := map[string]any{"checked": done, "available": available, "failed": failed, "deleted_failed": deletedFailed, "target_profile": cfg.TargetProfile}
 	s.jobs.Update(jobID, map[string]any{"done": done, "total": len(items), "success": available, "failed": failed})
-	s.jobs.complete(jobID, fmt.Sprintf("检测完成：可用 %d，失败 %d", available, failed), result)
+	s.jobs.complete(jobID, checkCompleteMessage(available, failed, deletedFailed, cfg.DeleteFailed), result)
+}
+
+func checkProgressMessage(done int, total int, available int, failed int, deletedFailed int, deleteFailed bool) string {
+	if deleteFailed {
+		return fmt.Sprintf("本机检测进行中：%d/%d，可用 %d，失败删除 %d", done, total, available, deletedFailed)
+	}
+	return fmt.Sprintf("本机检测进行中：%d/%d，可用 %d，失败 %d", done, total, available, failed)
+}
+
+func checkCompleteMessage(available int, failed int, deletedFailed int, deleteFailed bool) string {
+	if deleteFailed {
+		return fmt.Sprintf("检测完成：可用 %d，失败删除 %d", available, deletedFailed)
+	}
+	return fmt.Sprintf("检测完成：可用 %d，失败 %d", available, failed)
 }
 
 func normalizeTargetProfile(value string) string {

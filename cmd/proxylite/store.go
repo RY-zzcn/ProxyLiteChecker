@@ -409,6 +409,7 @@ SELECT id, proxy_key, ip, port, protocol, username, password, source
 FROM proxies ` + where + `
 ORDER BY
   CASE status WHEN 'untested' THEN 0 WHEN 'failed' THEN 1 WHEN 'available' THEN 2 ELSE 3 END,
+  CASE WHEN status = 'untested' AND last_checked_at IS NOT NULL THEN 0 ELSE 1 END,
   COALESCE(last_checked_at, created_at) ASC,
   id ASC
 LIMIT ?`
@@ -486,6 +487,43 @@ WHERE id = ?`,
 		result.ProxyID,
 	)
 	return err
+}
+
+func (s *store) DeleteProxyByID(id int) error {
+	_, err := s.db.Exec("DELETE FROM proxies WHERE id = ?", id)
+	return err
+}
+
+func (s *store) DeleteFailedProxies() (int64, error) {
+	result, err := s.db.Exec("DELETE FROM proxies WHERE status = 'failed'")
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *store) RequeueExpiredAvailable(ttlHours int) (int64, error) {
+	ttlHours = clampInt(ttlHours, 1, 8760)
+	result, err := s.db.Exec(`
+UPDATE proxies
+SET status = 'untested',
+    updated_at = datetime('now')
+WHERE enabled = 1
+  AND status = 'available'
+  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', ?)`,
+		fmt.Sprintf("-%d hours", ttlHours),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *store) CountProxiesByStatus(status string) (int, error) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM proxies WHERE enabled = 1 AND status = ?", status).Scan(&count)
+	return count, err
 }
 
 func (s *store) ExportAvailable(targetProfile string, limit int) ([]proxyRecord, error) {

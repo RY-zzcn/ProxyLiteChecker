@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 - 2026-07-03
+
+- Add automatic failed-proxy cleanup with optional immediate delete on failed check results.
+- Add available-proxy expiry settings that move stale available proxies back to untested and prioritize them before newly imported untested proxies.
+- Add low-stock source fetching that starts an automatic fetch when untested proxy count falls below a configurable threshold.
+- Add UI controls and scheduler status for cleanup, expiry, low-stock threshold, and fetch cooldown settings.
+
 ## 0.1.6 - 2026-07-03
 
 - Add persisted runtime settings for proxy list page size, source fetch limits, check scope, target profile, batch size, concurrency, rounds, and timeouts.

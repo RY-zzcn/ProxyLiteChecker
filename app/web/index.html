@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.1.6</span> · 额丶Y</small>
+            <small><span id="versionText">v0.1.7</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -163,13 +163,37 @@
               </label>
             </div>
             <label class="switch-row">
-              <input id="autoCheckEnabled" type="checkbox" />
-              <span>自动检测</span>
+              <input id="autoFetchLowStockEnabled" type="checkbox" />
+              <span>待检不足自动拉取</span>
             </label>
             <div class="mini-grid">
               <label>
-                检测间隔
-                <input id="autoCheckInterval" type="number" min="5" max="10080" />
+                待检阈值
+                <input id="autoFetchUntestedMinimum" type="number" min="100" max="1000000" />
+              </label>
+              <label>
+                补源冷却
+                <input id="autoFetchCooldown" type="number" min="1" max="1440" />
+              </label>
+            </div>
+            <label class="switch-row">
+              <input id="autoCheckEnabled" type="checkbox" />
+              <span>自动检测</span>
+            </label>
+            <div class="maintenance-grid">
+              <label class="switch-row">
+                <input id="deleteFailedOnCheck" type="checkbox" />
+                <span>失败即删</span>
+              </label>
+              <label class="switch-row">
+                <input id="recheckExpiredEnabled" type="checkbox" />
+                <span>可用过期转待检</span>
+              </label>
+            </div>
+            <div class="mini-grid">
+              <label>
+                可用有效期
+                <input id="availableTtlHours" type="number" min="1" max="8760" />
               </label>
               <label>
                 每页数量
@@ -182,7 +206,17 @@
                 </select>
               </label>
             </div>
-            <div class="mini-grid three">
+            <div class="mini-grid">
+              <label>
+                检测间隔
+                <input id="autoCheckInterval" type="number" min="5" max="10080" />
+              </label>
+              <label>
+                批量
+                <input id="settingsCheckLimit" type="number" min="1" max="100000" />
+              </label>
+            </div>
+            <div class="mini-grid">
               <label>
                 检测范围
                 <select id="settingsCheckStatus">
@@ -202,10 +236,6 @@
                   <option value="gemini">Gemini</option>
                   <option value="claude">Claude</option>
                 </select>
-              </label>
-              <label>
-                批量
-                <input id="settingsCheckLimit" type="number" min="1" max="100000" />
               </label>
             </div>
             <div class="mini-grid four">

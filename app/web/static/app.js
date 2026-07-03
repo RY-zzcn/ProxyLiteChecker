@@ -69,6 +69,9 @@ function defaultSettings() {
   return {
     proxy_page_size: 50,
     fetch_limit_per_source: 0,
+    auto_fetch_low_stock_enabled: false,
+    auto_fetch_untested_minimum: 5000,
+    auto_fetch_cooldown_minutes: 30,
     check_status: "untested",
     check_target_profile: "generic",
     check_limit: 500,
@@ -76,6 +79,9 @@ function defaultSettings() {
     check_rounds: 1,
     check_request_timeout: 6,
     check_hard_timeout: 60,
+    delete_failed_on_check: false,
+    recheck_expired_enabled: false,
+    available_ttl_hours: 24,
     auto_fetch_enabled: false,
     auto_fetch_interval_minutes: 360,
     auto_fetch_source_ids: [],
@@ -194,8 +200,14 @@ function renderSettings(settings, scheduler) {
   el("autoFetchInterval").value = state.settings.auto_fetch_interval_minutes;
   el("sourceLimit").value = state.settings.fetch_limit_per_source;
   el("settingsFetchLimit").value = state.settings.fetch_limit_per_source;
+  el("autoFetchLowStockEnabled").checked = Boolean(state.settings.auto_fetch_low_stock_enabled);
+  el("autoFetchUntestedMinimum").value = state.settings.auto_fetch_untested_minimum;
+  el("autoFetchCooldown").value = state.settings.auto_fetch_cooldown_minutes;
   el("autoCheckEnabled").checked = Boolean(state.settings.auto_check_enabled);
   el("autoCheckInterval").value = state.settings.auto_check_interval_minutes;
+  el("deleteFailedOnCheck").checked = Boolean(state.settings.delete_failed_on_check);
+  el("recheckExpiredEnabled").checked = Boolean(state.settings.recheck_expired_enabled);
+  el("availableTtlHours").value = state.settings.available_ttl_hours;
   el("proxyPageSize").value = String(state.settings.proxy_page_size);
   el("settingsCheckStatus").value = state.settings.check_status;
   el("settingsCheckTarget").value = state.settings.check_target_profile;
@@ -212,8 +224,14 @@ function renderSchedulerText(scheduler) {
   if (scheduler?.fetch?.enabled) {
     parts.push(`拉取 ${displayNextRun(scheduler.fetch.next_run_at)}`);
   }
+  if (scheduler?.fetch?.low_stock_enabled) {
+    parts.push(`待检 ${scheduler.fetch.last_untested_count ?? 0}/${scheduler.fetch.untested_minimum}`);
+  }
   if (scheduler?.check?.enabled) {
     parts.push(`检测 ${displayNextRun(scheduler.check.next_run_at)}`);
+  }
+  if (scheduler?.maintenance?.expired_requeued || scheduler?.maintenance?.failed_deleted) {
+    parts.push(`维护 删除 ${scheduler.maintenance.failed_deleted || 0} / 回检 ${scheduler.maintenance.expired_requeued || 0}`);
   }
   el("schedulerText").textContent = parts.length ? parts.join(" · ") : scheduler?.message || "自动任务未启用";
 }
@@ -443,6 +461,9 @@ async function saveSettings(event) {
       body: JSON.stringify({
         proxy_page_size: Number(el("proxyPageSize").value || 50),
         fetch_limit_per_source: Number(el("settingsFetchLimit").value || 0),
+        auto_fetch_low_stock_enabled: el("autoFetchLowStockEnabled").checked,
+        auto_fetch_untested_minimum: Number(el("autoFetchUntestedMinimum").value || 5000),
+        auto_fetch_cooldown_minutes: Number(el("autoFetchCooldown").value || 30),
         check_status: el("settingsCheckStatus").value,
         check_target_profile: el("settingsCheckTarget").value,
         check_limit: Number(el("settingsCheckLimit").value || 500),
@@ -450,6 +471,9 @@ async function saveSettings(event) {
         check_rounds: Number(el("settingsCheckRounds").value || 1),
         check_request_timeout: checkTimeout,
         check_hard_timeout: Math.max(checkTimeout, hardTimeout),
+        delete_failed_on_check: el("deleteFailedOnCheck").checked,
+        recheck_expired_enabled: el("recheckExpiredEnabled").checked,
+        available_ttl_hours: Number(el("availableTtlHours").value || 24),
         auto_fetch_enabled: el("autoFetchEnabled").checked,
         auto_fetch_interval_minutes: Number(el("autoFetchInterval").value || 360),
         auto_fetch_source_ids: allSourcesSelected ? [] : selectedSourceIDs,
