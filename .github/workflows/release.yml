@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Build assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "linux arm 7"
+            "windows amd64"
+            "darwin amd64"
+            "darwin arm64"
+          )
+          for target in "${targets[@]}"; do
+            read -r goos goarch goarm <<<"$target"
+            name="proxylite-${goos}-${goarch}"
+            env_args=("GOOS=${goos}" "GOARCH=${goarch}" "CGO_ENABLED=0")
+            if [[ -n "${goarm:-}" ]]; then
+              env_args+=("GOARM=${goarm}")
+              name="${name}v${goarm}"
+            fi
+            if [[ "${goos}" == "windows" ]]; then
+              name="${name}.exe"
+            fi
+            env "${env_args[@]}" go build -o "dist/${name}" ./cmd/proxylite
+          done
+          tar -czf "dist/proxylitechecker-${GITHUB_REF_NAME}.tar.gz" \
+            README.md CHANGELOG.md .env.example app scripts docker-compose.yml Dockerfile
+          cd dist
+          sha256sum * > SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: dist/*

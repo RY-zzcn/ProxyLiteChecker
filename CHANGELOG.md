@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 - 2026-07-03
+
+- Add GitHub Actions CI for tests, vet, and build checks.
+- Add tag-driven GitHub Release workflow with multi-platform binary assets and checksums.
+
 ## 0.1.1 - 2026-07-03
 
 - Redesign the static frontend as a single-page workbench without the left sidebar.
