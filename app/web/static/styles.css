@@ -241,6 +241,9 @@ textarea {
   color: var(--teal);
   border: 1px solid #bfe8df;
   font-size: 13px;
+  max-width: min(560px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -577,7 +580,7 @@ td {
 
 .gateway-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 

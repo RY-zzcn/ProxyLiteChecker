@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	appVersion           = "0.1.3"
+	appVersion           = "0.1.4"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -38,6 +38,9 @@ type config struct {
 	GatewayEnabled       bool
 	GatewayHost          string
 	GatewayPort          int
+	Socks5GatewayEnabled bool
+	Socks5GatewayHost    string
+	Socks5GatewayPort    int
 	GatewayUpstreamLimit int
 }
 
@@ -59,9 +62,13 @@ func main() {
 	srv := newServer(cfg)
 	if srv.cfg.GatewayEnabled {
 		srv.gateway = newGatewayServer(srv.store, gatewayConfig{
-			Host:          srv.cfg.GatewayHost,
-			Port:          srv.cfg.GatewayPort,
-			UpstreamLimit: srv.cfg.GatewayUpstreamLimit,
+			Host:            srv.cfg.GatewayHost,
+			Port:            srv.cfg.GatewayPort,
+			Socks5Enabled:   srv.cfg.Socks5GatewayEnabled,
+			Socks5Host:      srv.cfg.Socks5GatewayHost,
+			Socks5Port:      srv.cfg.Socks5GatewayPort,
+			UpstreamLimit:   srv.cfg.GatewayUpstreamLimit,
+			RequestTimeoutS: 20,
 		})
 		go func() {
 			if err := srv.gateway.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -97,6 +104,9 @@ func loadConfig() config {
 		GatewayEnabled:       envBool("PLC_GATEWAY_ENABLED", true),
 		GatewayHost:          envString("PLC_GATEWAY_HOST", "0.0.0.0"),
 		GatewayPort:          clampInt(envInt("PLC_GATEWAY_PORT", 18080), 1, 65535),
+		Socks5GatewayEnabled: envBool("PLC_SOCKS5_GATEWAY_ENABLED", true),
+		Socks5GatewayHost:    envString("PLC_SOCKS5_GATEWAY_HOST", envString("PLC_GATEWAY_HOST", "0.0.0.0")),
+		Socks5GatewayPort:    clampInt(envInt("PLC_SOCKS5_GATEWAY_PORT", 18081), 1, 65535),
 		GatewayUpstreamLimit: clampInt(envInt("PLC_GATEWAY_UPSTREAM_LIMIT", 200), 1, 2000),
 	}
 }

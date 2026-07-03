@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 - 2026-07-03
+
+- Expand built-in proxy sources from the initial stable subset to 30+ sources.
+- Add a SOCKS5 gateway on `0.0.0.0:18081`, sharing the same checked proxy pool as the HTTP gateway.
+- Show both HTTP and SOCKS5 gateway endpoints in the web console.
+
 ## 0.1.3 - 2026-07-03
 
 - Change the default HTTP gateway bind address to `0.0.0.0` for Docker and LAN consumers.

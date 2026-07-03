@@ -161,24 +161,30 @@ function updateSelectedSources() {
 }
 
 function renderGateway(gateway) {
-  const bind = gateway.enabled ? displayGatewayBind(gateway) : "未启用";
+  const httpBind = gateway.enabled ? displayGatewayBind(gateway, "http") : "未启用";
+  const socks5Bind = gateway.enabled && gateway.socks5_enabled ? displayGatewayBind(gateway, "socks5") : "未启用";
   const upstreams = gateway.upstreams || 0;
-  el("gatewayBind").textContent = bind;
+  el("gatewayHttpBind").textContent = httpBind;
+  el("gatewaySocks5Bind").textContent = socks5Bind;
   el("gatewayUpstreams").textContent = upstreams;
   el("gatewayTotal").textContent = gateway.total_requests || 0;
   el("gatewayRate").textContent = `${Math.round((gateway.success_rate || 0) * 100)}%`;
   const pill = el("gatewayPill");
-  pill.textContent = gateway.enabled ? `${bind} · ${upstreams} 上游` : "网关未启用";
+  pill.textContent = gateway.enabled ? `HTTP ${httpBind} · SOCKS5 ${socks5Bind} · ${upstreams} 上游` : "网关未启用";
   pill.classList.toggle("offline", !gateway.enabled);
 }
 
-function displayGatewayBind(gateway) {
-  const fallback = gateway.bind || `${gateway.host}:${gateway.port}`;
-  const port = gateway.port || String(fallback).split(":").pop();
-  if (gateway.host === "0.0.0.0" || String(fallback).startsWith("0.0.0.0:")) {
+function displayGatewayBind(gateway, type) {
+  const hostKey = type === "socks5" ? "socks5_host" : "http_host";
+  const portKey = type === "socks5" ? "socks5_port" : "http_port";
+  const bindKey = type === "socks5" ? "socks5_bind" : "http_bind";
+  const fallback = gateway[bindKey] || gateway.bind || `${gateway[hostKey] || gateway.host}:${gateway[portKey] || gateway.port}`;
+  const host = gateway[hostKey] || gateway.host;
+  const port = gateway[portKey] || String(fallback).split(":").pop();
+  if (host === "0.0.0.0" || String(fallback).startsWith("0.0.0.0:")) {
     return `${location.hostname || "服务器IP"}:${port}`;
   }
-  if (gateway.host === "::" || String(fallback).startsWith("[::]:")) {
+  if (host === "::" || String(fallback).startsWith("[::]:")) {
     return `${location.hostname || "服务器IP"}:${port}`;
   }
   return fallback;

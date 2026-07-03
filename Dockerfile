@@ -9,5 +9,5 @@ FROM debian:bookworm-slim
 WORKDIR /app
 COPY --from=build /out/proxylite /usr/local/bin/proxylite
 COPY app/web ./app/web
-EXPOSE 8899 18080
+EXPOSE 8899 18080 18081
 CMD ["proxylite"]

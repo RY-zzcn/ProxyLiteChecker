@@ -8,5 +8,6 @@ services:
     ports:
       - "8899:8899"
       - "18080:18080"
+      - "18081:18081"
     volumes:
       - ./data:/app/data

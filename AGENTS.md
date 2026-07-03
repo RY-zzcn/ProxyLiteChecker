@@ -42,6 +42,12 @@ Default HTTP gateway:
 http://0.0.0.0:18080
 ```
 
+Default SOCKS5 gateway:
+
+```text
+socks5://0.0.0.0:18081
+```
+
 ## Guardrails
 
 - Keep the implementation lightweight and single-binary friendly.
