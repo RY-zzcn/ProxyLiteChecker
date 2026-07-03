@@ -39,6 +39,8 @@ type gatewayServer struct {
 	startedAt string
 }
 
+const gatewayRecentLimit = 5
+
 type gatewayEndpoint struct {
 	TargetProfile   string
 	HTTPHost        string
@@ -350,16 +352,18 @@ func (e *gatewayEndpoint) rememberUpstreamLocked(upstream string) {
 	if len(e.recentUpstreams) == 0 || e.recentUpstreams[len(e.recentUpstreams)-1] != masked {
 		e.recentUpstreams = append(e.recentUpstreams, masked)
 	}
-	if len(e.recentUpstreams) > 8 {
-		e.recentUpstreams = append([]string{}, e.recentUpstreams[len(e.recentUpstreams)-8:]...)
+	if len(e.recentUpstreams) > gatewayRecentLimit {
+		e.recentUpstreams = append([]string{}, e.recentUpstreams[len(e.recentUpstreams)-gatewayRecentLimit:]...)
 	}
 }
 
 func (e *gatewayEndpoint) recentSnapshot() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := make([]string, len(e.recentUpstreams))
-	copy(out, e.recentUpstreams)
+	out := make([]string, 0, len(e.recentUpstreams))
+	for index := len(e.recentUpstreams) - 1; index >= 0; index-- {
+		out = append(out, e.recentUpstreams[index])
+	}
 	return out
 }
 

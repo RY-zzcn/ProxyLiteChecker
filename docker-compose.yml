@@ -1,6 +1,6 @@
 services:
   proxylitechecker:
-    image: ghcr.io/ry-zzcn/proxylitechecker:v0.2.0
+    image: ghcr.io/ry-zzcn/proxylitechecker:v0.2.1
     build: .
     container_name: proxylitechecker
     restart: unless-stopped

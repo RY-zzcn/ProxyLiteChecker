@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2026-07-03
+
+- Show local gateway recent upstreams as a stable five-row newest-first list with the current/latest proxy first.
+- Reduce gateway status polling to two seconds for fresher live gateway state without changing persisted proxy data.
+- Add coverage for gateway recent-upstream ordering and retention.
+
 ## 0.2.0 - 2026-07-03
 
 - Mark time units beside runtime settings and standardize project timestamps on Beijing time.

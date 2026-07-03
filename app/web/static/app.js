@@ -382,10 +382,15 @@ function gatewayCardHTML(item, gatewayEnabled) {
   const profile = item.target_profile || "generic";
   const httpBind = gatewayEnabled && item.http_enabled !== false ? displayGatewayBind(item, "http") : "未启用";
   const socks5Bind = gatewayEnabled && item.socks5_enabled ? displayGatewayBind(item, "socks5") : "未启用";
-  const recent = (item.recent_upstreams || [])
-    .slice()
-    .reverse()
-    .map((upstream) => `<span title="${escapeHtml(upstream)}">${escapeHtml(upstream)}</span>`)
+  const recent = gatewayRecentRows(item)
+    .map(
+      (entry, index) => `
+        <div class="recent-row${entry.value ? "" : " empty"}">
+          <span>${entry.value ? (index === 0 ? "当前" : "最近") : index === 0 ? "等待" : ""}</span>
+          <code title="${escapeHtml(entry.value || "")}">${escapeHtml(entry.value || (index === 0 ? "等待请求" : "-"))}</code>
+        </div>
+      `,
+    )
     .join("");
   return `
     <article class="gateway-card">
@@ -413,9 +418,23 @@ function gatewayCardHTML(item, gatewayEnabled) {
         <span>请求 ${Number(item.total_requests || 0)}</span>
         <span>成功率 ${Math.round(Number(item.success_rate || 0) * 100)}%</span>
       </div>
-      <div class="recent-list">${recent || "<span>等待请求</span>"}</div>
+      <div class="recent-list">${recent}</div>
     </article>
   `;
+}
+
+function gatewayRecentRows(item) {
+  const values = [];
+  const seen = new Set();
+  const push = (value) => {
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    values.push(text);
+  };
+  push(item.last_upstream);
+  (item.recent_upstreams || []).forEach(push);
+  return Array.from({ length: 5 }, (_, index) => ({ value: values[index] || "" }));
 }
 
 function displayGatewayBind(gateway, type) {
@@ -616,7 +635,7 @@ function startGatewayPolling() {
     } catch {
       // Avoid repeating toast noise when the session expires or the service restarts.
     }
-  }, 3000);
+  }, 2000);
 }
 
 function stopGatewayPolling() {

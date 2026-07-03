@@ -898,6 +898,7 @@ td:not(.proxy-cell) {
 .gateway-card {
   display: grid;
   gap: 10px;
+  align-content: start;
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--line);
@@ -973,26 +974,59 @@ td:not(.proxy-cell) {
 }
 
 .recent-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  display: grid;
+  grid-template-rows: repeat(5, 24px);
+  gap: 4px;
+  height: 136px;
+  min-height: 136px;
+  overflow: hidden;
+}
+
+.recent-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   min-height: 24px;
 }
 
-.recent-list span {
+.recent-row span {
   display: inline-flex;
   align-items: center;
-  max-width: 100%;
-  min-height: 22px;
-  margin: 0;
-  padding: 0 7px;
-  border-radius: 999px;
+  justify-content: center;
+  min-width: 0;
+  height: 22px;
+  border-radius: 5px;
   background: var(--surface-soft);
   color: var(--muted);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recent-row code {
+  display: block;
+  min-width: 0;
+  height: 24px;
+  padding: 4px 7px;
+  border: 1px solid #d9e3ec;
+  border-radius: 5px;
+  background: #fff;
+  color: #263746;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-row.empty span,
+.recent-row.empty code {
+  color: #9aa9b8;
+  background: #f5f8fb;
 }
 
 .error-text {

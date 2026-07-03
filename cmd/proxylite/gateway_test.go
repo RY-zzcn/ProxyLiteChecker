@@ -59,3 +59,35 @@ func TestGatewaySelectUpstreamRoundRobinByTarget(t *testing.T) {
 		t.Fatalf("unexpected round-robin order: %q %q %q", first, second, third)
 	}
 }
+
+func TestGatewayRecentSnapshotNewestFirstLimit(t *testing.T) {
+	endpoint := &gatewayEndpoint{}
+	for _, upstream := range []string{
+		"http://1.1.1.1:8080",
+		"http://2.2.2.2:8080",
+		"http://3.3.3.3:8080",
+		"http://4.4.4.4:8080",
+		"http://5.5.5.5:8080",
+		"http://6.6.6.6:8080",
+	} {
+		endpoint.mu.Lock()
+		endpoint.rememberUpstreamLocked(upstream)
+		endpoint.mu.Unlock()
+	}
+	got := endpoint.recentSnapshot()
+	want := []string{
+		"http://6.6.6.6:8080",
+		"http://5.5.5.5:8080",
+		"http://4.4.4.4:8080",
+		"http://3.3.3.3:8080",
+		"http://2.2.2.2:8080",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d recent upstreams, got %d: %#v", len(want), len(got), got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("unexpected recent upstreams: got %#v want %#v", got, want)
+		}
+	}
+}
