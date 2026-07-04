@@ -36,6 +36,12 @@ type appSettings struct {
 	AutoCheckEnabled         bool     `json:"auto_check_enabled"`
 	AutoCheckIntervalMinutes int      `json:"auto_check_interval_minutes"`
 	GatewayTargetProfile     string   `json:"gateway_target_profile"`
+	GatewayUpstreamLimit     int      `json:"gateway_upstream_limit"`
+	GatewayUpstreamStrategy  string   `json:"gateway_upstream_strategy"`
+	GatewayRetryAttempts     int      `json:"gateway_retry_attempts"`
+	GatewayFailureThreshold  int      `json:"gateway_failure_threshold"`
+	GatewayFailureCooldownS  int      `json:"gateway_failure_cooldown_seconds"`
+	GatewayRequestTimeoutS   int      `json:"gateway_request_timeout_seconds"`
 	ExportTargetProfile      string   `json:"export_target_profile"`
 }
 
@@ -109,6 +115,12 @@ func defaultAppSettings() appSettings {
 		AutoCheckEnabled:         false,
 		AutoCheckIntervalMinutes: 120,
 		GatewayTargetProfile:     "generic",
+		GatewayUpstreamLimit:     200,
+		GatewayUpstreamStrategy:  gatewayStrategyRoundRobin,
+		GatewayRetryAttempts:     gatewayDefaultRetryAttempts,
+		GatewayFailureThreshold:  gatewayDefaultFailureThreshold,
+		GatewayFailureCooldownS:  gatewayDefaultFailureCooldownS,
+		GatewayRequestTimeoutS:   20,
 		ExportTargetProfile:      "generic",
 	}
 }
@@ -232,6 +244,24 @@ func settingsFromPayload(current appSettings, payload map[string]any) appSetting
 	if value, ok := payload["gateway_target_profile"]; ok {
 		settings.GatewayTargetProfile = optionalString(value, settings.GatewayTargetProfile)
 	}
+	if value, ok := payload["gateway_upstream_limit"]; ok {
+		settings.GatewayUpstreamLimit = anyToInt(value)
+	}
+	if value, ok := payload["gateway_upstream_strategy"]; ok {
+		settings.GatewayUpstreamStrategy = optionalString(value, settings.GatewayUpstreamStrategy)
+	}
+	if value, ok := payload["gateway_retry_attempts"]; ok {
+		settings.GatewayRetryAttempts = anyToInt(value)
+	}
+	if value, ok := payload["gateway_failure_threshold"]; ok {
+		settings.GatewayFailureThreshold = anyToInt(value)
+	}
+	if value, ok := payload["gateway_failure_cooldown_seconds"]; ok {
+		settings.GatewayFailureCooldownS = anyToInt(value)
+	}
+	if value, ok := payload["gateway_request_timeout_seconds"]; ok {
+		settings.GatewayRequestTimeoutS = anyToInt(value)
+	}
 	if value, ok := payload["export_target_profile"]; ok {
 		settings.ExportTargetProfile = optionalString(value, settings.ExportTargetProfile)
 	}
@@ -261,6 +291,12 @@ func normalizeAppSettings(settings appSettings) appSettings {
 	settings.AutoCheckIntervalMinutes = clampInt(settings.AutoCheckIntervalMinutes, 5, 10080)
 	settings.AutoFetchSourceIDs = validSourceIDs(settings.AutoFetchSourceIDs)
 	settings.GatewayTargetProfile = normalizeTargetProfileOrAll(settings.GatewayTargetProfile, "generic")
+	settings.GatewayUpstreamLimit = clampInt(settings.GatewayUpstreamLimit, 1, 2000)
+	settings.GatewayUpstreamStrategy = normalizeGatewayUpstreamStrategy(settings.GatewayUpstreamStrategy)
+	settings.GatewayRetryAttempts = clampInt(settings.GatewayRetryAttempts, 1, 5)
+	settings.GatewayFailureThreshold = clampInt(settings.GatewayFailureThreshold, 1, 100)
+	settings.GatewayFailureCooldownS = clampInt(settings.GatewayFailureCooldownS, 1, 86400)
+	settings.GatewayRequestTimeoutS = clampInt(settings.GatewayRequestTimeoutS, 2, 120)
 	settings.ExportTargetProfile = normalizeTargetProfileOrAll(settings.ExportTargetProfile, "generic")
 	return settings
 }
@@ -525,18 +561,21 @@ func (s *server) applyProxyMaintenance(settings appSettings) (int64, int64, int6
 		if err != nil {
 			return 0, 0, 0, err
 		}
+		_ = s.store.RecordMaintenanceEvent("delete_failed", deleted, "", "delete_failed_on_check", settings)
 	}
 	if settings.RecheckExpiredEnabled {
 		requeued, err = s.store.RequeueExpiredAvailable(settings.AvailableTTLHours)
 		if err != nil {
 			return deleted, 0, 0, err
 		}
+		_ = s.store.RecordMaintenanceEvent("requeue_expired_available", requeued, "", "available_ttl_hours", settings)
 	}
 	if settings.DeleteExpiredUntested {
 		untestedDeleted, err = s.store.DeleteExpiredUntested(settings.UntestedTTLHours)
 		if err != nil {
 			return deleted, requeued, 0, err
 		}
+		_ = s.store.RecordMaintenanceEvent("delete_expired_untested", untestedDeleted, "", "untested_ttl_hours", settings)
 	}
 	return deleted, requeued, untestedDeleted, nil
 }

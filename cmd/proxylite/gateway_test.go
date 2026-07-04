@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"net"
 	"testing"
 	"time"
 )
@@ -148,16 +151,185 @@ func TestGatewaySelectUpstreamUsesLoadedPoolUntilRefresh(t *testing.T) {
 		t.Fatalf("expected existing loaded pool to advance, got %q", second)
 	}
 
-	endpoint.mu.Lock()
-	endpoint.upstreamsLoadedAt = time.Now().Add(-gatewayUpstreamRefreshInterval - time.Second)
-	endpoint.index = 0
-	endpoint.mu.Unlock()
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreamsLoadedAt = time.Now().Add(-gatewayUpstreamRefreshInterval - time.Second)
+	endpoint.selector.index = 0
+	endpoint.selector.mu.Unlock()
 	refreshed, err := gateway.selectUpstream(endpoint)
 	if err != nil {
 		t.Fatalf("select refreshed upstream: %v", err)
 	}
 	if refreshed != "http://3.3.3.3:8080" {
 		t.Fatalf("expected refreshed pool to include lowest-latency upstream first, got %q", refreshed)
+	}
+}
+
+func TestGatewaySelectorSkipsIsolatedUpstream(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{
+		Host:             "127.0.0.1",
+		Port:             0,
+		TargetProfiles:   []string{"openai"},
+		FailureThreshold: 2,
+		FailureCooldownS: 60,
+	})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.mu.Unlock()
+
+	first, err := gateway.selectUpstream(endpoint)
+	if err != nil {
+		t.Fatalf("select first upstream: %v", err)
+	}
+	endpoint.recordUpstreamFailure(first, errors.New("dial timeout"))
+	endpoint.recordUpstreamFailure(first, errors.New("dial timeout"))
+
+	second, err := gateway.selectUpstream(endpoint)
+	if err != nil {
+		t.Fatalf("select second upstream: %v", err)
+	}
+	if second == first {
+		t.Fatalf("expected isolated upstream to be skipped, selected %q again", second)
+	}
+	snapshot := gateway.endpointSelectorSnapshot(endpoint)
+	if snapshot.Active != 1 || snapshot.Skipped != 1 {
+		t.Fatalf("expected one active and one skipped upstream, got %#v", snapshot)
+	}
+}
+
+func TestGatewaySelectorReleasesWhenAllUpstreamsIsolated(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{
+		Host:             "127.0.0.1",
+		Port:             0,
+		TargetProfiles:   []string{"openai"},
+		FailureThreshold: 1,
+		FailureCooldownS: 60,
+	})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.mu.Unlock()
+	endpoint.recordUpstreamFailure("http://1.1.1.1:8080", errors.New("dial timeout"))
+	endpoint.recordUpstreamFailure("http://2.2.2.2:8080", errors.New("dial timeout"))
+
+	selected, err := gateway.selectUpstream(endpoint)
+	if err != nil {
+		t.Fatalf("select after all isolated: %v", err)
+	}
+	if selected == "" {
+		t.Fatalf("expected an upstream after releasing isolation window")
+	}
+	snapshot := gateway.endpointSelectorSnapshot(endpoint)
+	if snapshot.Active != 2 || snapshot.Skipped != 0 || snapshot.LastAllReleasedAt == "" {
+		t.Fatalf("expected all isolation state released, got %#v", snapshot)
+	}
+}
+
+func TestGatewaySelectorStrategySwitchAppliesImmediately(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{
+		Host:             "127.0.0.1",
+		Port:             0,
+		TargetProfiles:   []string{"openai"},
+		FailureThreshold: 3,
+		FailureCooldownS: 60,
+		UpstreamStrategy: gatewayStrategyRoundRobin,
+	})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.index = 0
+	endpoint.selector.mu.Unlock()
+	endpoint.recordUpstreamFailure("http://1.1.1.1:8080", errors.New("temporary failure"))
+
+	gateway.cfg.UpstreamStrategy = gatewayStrategyStabilityFirst
+	selected, err := gateway.selectUpstream(endpoint)
+	if err != nil {
+		t.Fatalf("select stability-first upstream: %v", err)
+	}
+	if selected != "http://2.2.2.2:8080" {
+		t.Fatalf("expected stability-first strategy to prefer upstream with fewer failures, got %q", selected)
+	}
+	snapshot := gateway.endpointSelectorSnapshot(endpoint)
+	if snapshot.Strategy != gatewayStrategyStabilityFirst {
+		t.Fatalf("expected strategy switch in snapshot, got %#v", snapshot)
+	}
+}
+
+func TestGatewayOpenTunnelRetriesNextUpstream(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{
+		Host:             "127.0.0.1",
+		Port:             0,
+		TargetProfiles:   []string{"openai"},
+		RetryAttempts:    2,
+		FailureThreshold: 1,
+		FailureCooldownS: 60,
+	})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.mu.Unlock()
+	calls := []string{}
+	gateway.dialProxy = func(ctx context.Context, proxyURL string, target string, timeout time.Duration) (net.Conn, error) {
+		calls = append(calls, proxyURL)
+		if proxyURL == "http://1.1.1.1:8080" {
+			return nil, errors.New("dial timeout")
+		}
+		left, right := net.Pipe()
+		_ = right.Close()
+		return left, nil
+	}
+
+	conn, upstream, err := gateway.openTunnelWithRetry(context.Background(), endpoint, "example.com:443")
+	if err != nil {
+		t.Fatalf("open tunnel with retry: %v", err)
+	}
+	_ = conn.Close()
+	if upstream != "http://2.2.2.2:8080" {
+		t.Fatalf("expected retry to use second upstream, got %q", upstream)
+	}
+	if len(calls) != 2 || calls[0] != "http://1.1.1.1:8080" || calls[1] != "http://2.2.2.2:8080" {
+		t.Fatalf("unexpected dial calls: %#v", calls)
+	}
+	snapshot := gateway.endpointSelectorSnapshot(endpoint)
+	if snapshot.Active != 1 || snapshot.Skipped != 1 {
+		t.Fatalf("expected failed upstream to be isolated, got %#v", snapshot)
+	}
+}
+
+func TestGatewayOpenTunnelDoesNotRepeatTriedUpstreams(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{
+		Host:             "127.0.0.1",
+		Port:             0,
+		TargetProfiles:   []string{"openai"},
+		RetryAttempts:    3,
+		FailureThreshold: 10,
+		FailureCooldownS: 60,
+	})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.mu.Unlock()
+	calls := []string{}
+	gateway.dialProxy = func(ctx context.Context, proxyURL string, target string, timeout time.Duration) (net.Conn, error) {
+		calls = append(calls, proxyURL)
+		return nil, errors.New("dial timeout")
+	}
+
+	conn, upstream, err := gateway.openTunnelWithRetry(context.Background(), endpoint, "example.com:443")
+	if err == nil {
+		_ = conn.Close()
+		t.Fatalf("expected retry exhaustion error")
+	}
+	if upstream != "http://2.2.2.2:8080" {
+		t.Fatalf("expected last attempted upstream to be second upstream, got %q", upstream)
+	}
+	if len(calls) != 2 || calls[0] != "http://1.1.1.1:8080" || calls[1] != "http://2.2.2.2:8080" {
+		t.Fatalf("expected each upstream to be tried once, got %#v", calls)
 	}
 }
 

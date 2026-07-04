@@ -190,6 +190,12 @@ function defaultSettings() {
     auto_fetch_source_ids: [],
     auto_check_enabled: false,
     auto_check_interval_minutes: 120,
+    gateway_upstream_limit: 200,
+    gateway_upstream_strategy: "round_robin",
+    gateway_retry_attempts: 2,
+    gateway_failure_threshold: 3,
+    gateway_failure_cooldown_seconds: 300,
+    gateway_request_timeout_seconds: 20,
     export_target_profile: "generic",
   };
 }
@@ -294,18 +300,32 @@ function renderSources() {
   el("sourceCountText").textContent = `${state.sources.length} 个代理源`;
   el("sourcesList").innerHTML = state.sources
     .map(
-      (source) => `
+      (source) => {
+        const health = source.health || source;
+        const status = sourceHealthLabel(health);
+        return `
         <label class="source-item" title="${escapeHtml(source.url)}">
           <input type="checkbox" class="source-check" value="${escapeHtml(source.id)}" ${useAll || selectedIDs.has(source.id) ? "checked" : ""} />
           <span>${escapeHtml(source.name)}</span>
+          <small>${escapeHtml(status)}</small>
         </label>
-      `,
+      `;
+      },
     )
     .join("");
   document.querySelectorAll(".source-check").forEach((input) => {
     input.addEventListener("change", updateSelectedSources);
   });
   updateSelectedSources();
+}
+
+function sourceHealthLabel(health) {
+  if (!health || !health.last_fetch_status) return "未拉取";
+  if (health.last_fetch_status === "success") {
+    return `成功 新增 ${Number(health.last_new || 0)} / 更新 ${Number(health.last_updated || 0)}`;
+  }
+  const disabled = health.disabled_until ? ` 冷却至 ${displayTimestamp(health.disabled_until, "")}` : "";
+  return `失败 ${Number(health.failure_streak || 0)}${disabled}`;
 }
 
 function renderSettings(settings, scheduler) {
@@ -337,6 +357,12 @@ function renderSettings(settings, scheduler) {
   el("settingsCheckRounds").value = state.settings.check_rounds;
   el("settingsCheckTimeout").value = state.settings.check_request_timeout;
   el("settingsCheckHardTimeout").value = state.settings.check_hard_timeout;
+  el("gatewayUpstreamLimit").value = state.settings.gateway_upstream_limit;
+  el("gatewayUpstreamStrategy").value = state.settings.gateway_upstream_strategy;
+  el("gatewayRetryAttempts").value = state.settings.gateway_retry_attempts;
+  el("gatewayFailureThreshold").value = state.settings.gateway_failure_threshold;
+  el("gatewayFailureCooldown").value = state.settings.gateway_failure_cooldown_seconds;
+  el("gatewayRequestTimeout").value = state.settings.gateway_request_timeout_seconds;
   el("exportTarget").value = normalizeTargetValues(state.settings.export_target_profile, true)[0];
   updateExportLinks();
   renderSchedulerText(state.scheduler);
@@ -376,23 +402,68 @@ function renderGateway(gateway) {
   const profiles = (gateway.profiles || []).length ? gateway.profiles : [gateway];
   const enabledProfiles = profiles.filter((item) => item && (item.http_enabled || item.socks5_enabled || gateway.enabled));
   const loadedSlots = Number(gateway.loaded_upstreams ?? profiles.reduce((total, item) => total + gatewayLoadedUpstreams(item), 0));
+  const activeSlots = Number(gateway.active_upstreams ?? profiles.reduce((total, item) => total + gatewayActiveUpstreams(item), 0));
+  const skippedSlots = Number(gateway.skipped_upstreams ?? profiles.reduce((total, item) => total + gatewaySkippedUpstreams(item), 0));
   const uniqueAvailable = Number(
     gateway.unique_available_upstreams ?? gateway.available_upstreams ?? profiles.reduce((total, item) => total + gatewayAvailableUpstreams(item), 0),
   );
   const upstreamLimit = gatewayUpstreamLimit(gateway, profiles);
-  const limitText = upstreamLimit > 0 ? `单目标上限 ${upstreamLimit}（修改后重启生效）` : "单目标上限未设置";
-  const totalRequests = Number(gateway.total_requests || profiles.reduce((total, item) => total + Number(item.total_requests || 0), 0));
+  const limitText = upstreamLimit > 0 ? `单目标上限 ${upstreamLimit}` : "单目标上限未设置";
+  const isolationText = skippedSlots > 0 ? ` · 活跃 ${activeSlots} / 隔离 ${skippedSlots}` : "";
+  const totalRequests = Number(gateway.valid_requests ?? gateway.total_requests ?? profiles.reduce((total, item) => total + Number(item.valid_requests ?? item.total_requests ?? 0), 0));
+  const totalConnections = Number(gateway.total_connections ?? profiles.reduce((total, item) => total + Number(item.total_connections || 0), 0));
   el("gatewaySummary").textContent = gateway.enabled
-    ? `${enabledProfiles.length} 个目标入口 · ${limitText} · 已装载 ${loadedSlots} 个目标槽位 · 唯一可用 ${uniqueAvailable} 个上游 · 入口请求 ${totalRequests}`
+    ? `${enabledProfiles.length} 个目标入口 · ${limitText} · 已装载 ${loadedSlots} 个目标槽位${isolationText} · 唯一可用 ${uniqueAvailable} 个上游 · 有效请求 ${totalRequests} / 连接 ${totalConnections}`
     : "网关未启用";
   el("gatewayCards").innerHTML =
     profiles
       .map((item) => gatewayCardHTML(item, gateway.enabled))
       .join("") || `<article class="gateway-card empty-row">网关未启用</article>`;
+  renderGatewayEvents(gateway.events || []);
   const pill = el("gatewayPill");
   pill.textContent = gateway.enabled ? `网关 ${enabledProfiles.length} 目标 · ${loadedSlots} 槽位 · ${uniqueAvailable} 上游` : "网关未启用";
-  pill.title = gateway.enabled ? `${limitText}；通过 PLC_GATEWAY_UPSTREAM_LIMIT 修改` : "";
+  pill.title = gateway.enabled
+    ? `${limitText}；策略 ${gatewayStrategyLabel(gateway.upstream_strategy)}；重试 ${Number(gateway.retry_attempts || 1)} 次；保存设置后热生效`
+    : "";
   pill.classList.toggle("offline", !gateway.enabled);
+}
+
+function renderGatewayEvents(events) {
+  const container = el("gatewayEvents");
+  const rows = (events || []).slice(0, 8);
+  if (!rows.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = `
+    <div class="gateway-events-head">
+      <strong>网关诊断</strong>
+      <span>最近 ${rows.length} 条异常事件</span>
+    </div>
+    <div class="gateway-event-list">
+      ${rows
+        .map(
+          (event) => `
+            <div class="gateway-event-row" title="${escapeHtml(event.message || "")}">
+              <span>${escapeHtml(displayTimestamp(event.time, "-"))}</span>
+              <span>${escapeHtml(targetLabel(event.target_profile))}</span>
+              <span>${escapeHtml(event.gateway_type || "-")}</span>
+              <code>${escapeHtml(event.upstream || event.client_ip || "-")}</code>
+              <strong>${escapeHtml(gatewayEventLabel(event.event_type))}</strong>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function gatewayEventLabel(value) {
+  return {
+    rejected: "已拒绝",
+    upstream_failure: "上游失败",
+    request_failed: "请求失败",
+  }[value] || value || "事件";
 }
 
 function gatewayUpstreamLimit(gateway, profiles) {
@@ -407,6 +478,14 @@ function gatewayUpstreamLimit(gateway, profiles) {
 
 function gatewayLoadedUpstreams(item) {
   return Number(item?.loaded_upstreams ?? item?.upstreams ?? 0);
+}
+
+function gatewayActiveUpstreams(item) {
+  return Number(item?.active_upstreams ?? gatewayLoadedUpstreams(item));
+}
+
+function gatewaySkippedUpstreams(item) {
+  return Number(item?.skipped_upstreams ?? 0);
 }
 
 function gatewayAvailableUpstreams(item) {
@@ -434,6 +513,12 @@ function gatewayCardHTML(item, gatewayEnabled) {
   const socks5Bind = gatewayEnabled && item.socks5_enabled ? displayGatewayBind(item, "socks5") : "未启用";
   const loadedUpstreams = gatewayLoadedUpstreams(item);
   const availableUpstreams = gatewayAvailableUpstreams(item);
+  const activeUpstreams = gatewayActiveUpstreams(item);
+  const skippedUpstreams = gatewaySkippedUpstreams(item);
+  const validRequests = Number(item.valid_requests ?? item.total_requests ?? 0);
+  const totalConnections = Number(item.total_connections ?? validRequests);
+  const rejectedRequests = Number(item.rejected_requests || 0);
+  const upstreamAttempts = Number(item.upstream_attempts || 0);
   const recent = gatewayRecentRows(item)
     .map(
       (entry, index) => `
@@ -467,12 +552,27 @@ function gatewayCardHTML(item, gatewayEnabled) {
         </div>
       </div>
       <div class="gateway-card-meta">
-        <span>入口请求 ${Number(item.total_requests || 0)}</span>
+        <span>有效 ${validRequests}</span>
+        <span>连接 ${totalConnections}</span>
+        <span>拒绝 ${rejectedRequests}</span>
+        <span>上游尝试 ${upstreamAttempts}</span>
         <span>成功率 ${Math.round(Number(item.success_rate || 0) * 100)}%</span>
+        <span>活跃 ${activeUpstreams}</span>
+        <span>隔离 ${skippedUpstreams}</span>
+        <span>${escapeHtml(gatewayStrategyLabel(item.upstream_strategy))}</span>
       </div>
       <div class="recent-list">${recent}</div>
     </article>
   `;
+}
+
+function gatewayStrategyLabel(value) {
+  const key = String(value || "round_robin").trim();
+  return {
+    round_robin: "轮询",
+    lowest_latency: "低延迟",
+    stability_first: "稳定优先",
+  }[key] || key;
 }
 
 function gatewayRecentRows(item) {
@@ -602,7 +702,7 @@ async function loadProxies() {
         (item) => `
           <tr>
             <td class="proxy-cell" title="${escapeHtml(proxyUrl(item))}">${escapeHtml(proxyUrl(item))}</td>
-            <td>${statusTag(item.status)}</td>
+            <td>${statusTag(item.status)}${item.failure_reason ? `<span class="reason-tag">${escapeHtml(item.failure_reason)}</span>` : ""}</td>
             <td>${escapeHtml(item.grade || "-")}</td>
             <td>${item.latency_ms == null ? "-" : `${item.latency_ms} ms`}</td>
             <td>${escapeHtml(item.exit_ip || "-")} ${item.country ? `<span class="muted">${escapeHtml(item.country)}</span>` : ""}</td>
@@ -768,6 +868,12 @@ async function saveSettings(event) {
         auto_fetch_source_ids: allSourcesSelected ? [] : selectedSourceIDs,
         auto_check_enabled: el("autoCheckEnabled").checked,
         auto_check_interval_minutes: Number(el("autoCheckInterval").value || 120),
+        gateway_upstream_limit: Number(el("gatewayUpstreamLimit").value || 200),
+        gateway_upstream_strategy: el("gatewayUpstreamStrategy").value,
+        gateway_retry_attempts: Number(el("gatewayRetryAttempts").value || 2),
+        gateway_failure_threshold: Number(el("gatewayFailureThreshold").value || 3),
+        gateway_failure_cooldown_seconds: Number(el("gatewayFailureCooldown").value || 300),
+        gateway_request_timeout_seconds: Number(el("gatewayRequestTimeout").value || 20),
         export_target_profile: el("exportTarget").value,
       }),
     });
@@ -775,6 +881,7 @@ async function saveSettings(event) {
     state.proxies.limit = Number(payload.settings.proxy_page_size || 50);
     state.proxies.offset = 0;
     toast("设置已保存", "success");
+    await loadGateway();
     await loadProxies();
   });
 }

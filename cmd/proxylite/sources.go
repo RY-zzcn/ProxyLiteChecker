@@ -75,17 +75,18 @@ func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, e
 	}
 	sourceIDs := anyToStringSlice(payload["source_ids"])
 	limitPerSource := anyToInt(payload["limit_per_source"])
+	scheduled := strings.EqualFold(optionalString(payload["scheduled_trigger"], ""), "auto")
 	if limitPerSource < 0 {
 		limitPerSource = 0
 	}
 	if limitPerSource > 50000 {
 		limitPerSource = 50000
 	}
-	go s.runFetchSourcesJob(ctx, job.ID, sourceIDs, limitPerSource)
+	go s.runFetchSourcesJob(ctx, job.ID, sourceIDs, limitPerSource, scheduled)
 	return map[string]any{"job_id": job.ID}, nil
 }
 
-func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs []string, limitPerSource int) {
+func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs []string, limitPerSource int, scheduled bool) {
 	sources := selectedSources(sourceIDs)
 	total := len(sources)
 	s.jobs.Update(jobID, map[string]any{"total": total, "message": fmt.Sprintf("开始拉取 %d 个代理源", total)})
@@ -98,10 +99,21 @@ func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs
 			s.jobs.finishCancelled(jobID, "拉取代理源已停止")
 			return
 		}
+		if scheduled {
+			coolingDown, disabledUntil, err := s.store.SourceCoolingDown(source.ID)
+			if err != nil {
+				s.jobs.Update(jobID, map[string]any{"message": fmt.Sprintf("源健康读取失败：%s", source.Name)})
+			} else if coolingDown {
+				sourceResults = append(sourceResults, map[string]any{"id": source.ID, "name": source.Name, "skipped": true, "disabled_until": disabledUntil})
+				s.jobs.Update(jobID, map[string]any{"done": i + 1, "message": fmt.Sprintf("跳过冷却源：%s", source.Name)})
+				continue
+			}
+		}
 		s.jobs.Update(jobID, map[string]any{"done": i, "message": fmt.Sprintf("正在拉取：%s", source.Name)})
 		text, count, err := fetchSource(ctx, source, limitPerSource)
 		if err != nil {
 			failed++
+			_ = s.store.RecordSourceFetch(source.ID, 0, 0, 0, err)
 			sourceResults = append(sourceResults, map[string]any{"id": source.ID, "name": source.Name, "error": err.Error()})
 			s.jobs.Update(jobID, map[string]any{"done": i + 1, "failed": failed, "message": fmt.Sprintf("代理源失败：%s", source.Name)})
 			continue
@@ -109,18 +121,22 @@ func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs
 		result, err := s.store.ImportProxies(text, source.ID, source.DefaultProtocol)
 		if err != nil {
 			failed++
+			_ = s.store.RecordSourceFetch(source.ID, count, 0, 0, err)
 			sourceResults = append(sourceResults, map[string]any{"id": source.ID, "name": source.Name, "count": count, "error": err.Error()})
 			s.jobs.Update(jobID, map[string]any{"done": i + 1, "failed": failed, "message": fmt.Sprintf("代理源导入失败：%s", source.Name)})
 			continue
 		}
-		added += anyToInt(result["added"])
-		updated += anyToInt(result["updated"])
+		sourceAdded := anyToInt(result["added"])
+		sourceUpdated := anyToInt(result["updated"])
+		added += sourceAdded
+		updated += sourceUpdated
+		_ = s.store.RecordSourceFetch(source.ID, count, sourceAdded, sourceUpdated, nil)
 		sourceResults = append(sourceResults, map[string]any{
 			"id":      source.ID,
 			"name":    source.Name,
 			"count":   count,
-			"added":   anyToInt(result["added"]),
-			"updated": anyToInt(result["updated"]),
+			"added":   sourceAdded,
+			"updated": sourceUpdated,
 		})
 		s.jobs.Update(jobID, map[string]any{
 			"done":    i + 1,

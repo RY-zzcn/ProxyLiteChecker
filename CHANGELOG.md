@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - 2026-07-04
+
+- Add gateway selector state with active and isolated upstream counts in the status API and web console.
+- Add configurable gateway upstream strategies, retry attempts, failure threshold, and failure cooldown settings.
+- Retry CONNECT, SOCKS5, and retry-safe HTTP requests on the next upstream when an upstream fails, without repeating the same upstream in one request.
+- Temporarily isolate upstreams after consecutive failures and release the isolation window if every loaded upstream is isolated.
+- Add runtime gateway config persistence, `GET/POST /api/gateway/config`, and Web UI controls for hot-applied gateway settings.
+- Split gateway counters into total connections, valid requests, rejected requests, upstream attempts, successes, and failures.
+- Add in-memory gateway diagnostic events for recent rejected and failed requests.
+- Track source fetch health, consecutive failures, automatic source cooldown, and maintenance audit events.
+- Add failure reason classification for proxy checks and expose read-only target profile metadata.
+
 ## 0.2.4 - 2026-07-04
 
 - Show gateway addresses as complete `http://` and `socks5://` URLs and rename the section to "代理网关".

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -45,6 +46,7 @@ type proxyRecord struct {
 	CloudflareStatus *string `json:"cloudflare_status,omitempty"`
 	RecommendedUse   string  `json:"recommended_use"`
 	LastError        *string `json:"last_error,omitempty"`
+	FailureReason    string  `json:"failure_reason,omitempty"`
 	FailureCount     int     `json:"failure_count"`
 	CreatedAt        string  `json:"created_at"`
 	UpdatedAt        string  `json:"updated_at"`
@@ -195,6 +197,28 @@ CREATE TABLE IF NOT EXISTS proxy_checks (
   FOREIGN KEY (proxy_id) REFERENCES proxies(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_proxy_checks_target_status ON proxy_checks(target_profile, status);
+CREATE TABLE IF NOT EXISTS source_health (
+  source_id TEXT PRIMARY KEY,
+  last_fetch_at TEXT,
+  last_fetch_status TEXT NOT NULL DEFAULT '',
+  last_imported INTEGER NOT NULL DEFAULT 0,
+  last_new INTEGER NOT NULL DEFAULT 0,
+  last_updated INTEGER NOT NULL DEFAULT 0,
+  failure_streak INTEGER NOT NULL DEFAULT 0,
+  disabled_until TEXT,
+  last_error TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
+);
+CREATE TABLE IF NOT EXISTS maintenance_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  target_profile TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  settings_snapshot TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
+);
+CREATE INDEX IF NOT EXISTS idx_maintenance_events_created ON maintenance_events(created_at DESC);
 INSERT OR IGNORE INTO proxy_checks (
   proxy_id, target_profile, status, grade, latency_ms, exit_ip, country, ip_type, asn_org,
   success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
@@ -413,6 +437,120 @@ func (s *store) ImportProxies(text string, source string, defaultProtocol string
 	}
 	committed = true
 	return map[string]any{"total": len(items), "added": added, "updated": updated, "skipped": 0}, nil
+}
+
+func (s *store) SourceHealth() (map[string]map[string]any, error) {
+	rows, err := s.db.Query(`
+SELECT source_id, last_fetch_at, last_fetch_status, last_imported, last_new, last_updated,
+       failure_streak, disabled_until, last_error, updated_at
+FROM source_health`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]map[string]any{}
+	for rows.Next() {
+		var sourceID, status, updatedAt string
+		var lastFetchAt, disabledUntil, lastError sql.NullString
+		var imported, added, updated, failureStreak int
+		if err := rows.Scan(&sourceID, &lastFetchAt, &status, &imported, &added, &updated, &failureStreak, &disabledUntil, &lastError, &updatedAt); err != nil {
+			return nil, err
+		}
+		out[sourceID] = map[string]any{
+			"source_id":         sourceID,
+			"last_fetch_at":     nullStringValue(lastFetchAt),
+			"last_fetch_status": status,
+			"last_imported":     imported,
+			"last_new":          added,
+			"last_updated":      updated,
+			"failure_streak":    failureStreak,
+			"disabled_until":    nullStringValue(disabledUntil),
+			"last_error":        nullStringValue(lastError),
+			"updated_at":        updatedAt,
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *store) RecordSourceFetch(sourceID string, imported int, added int, updated int, err error) error {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return nil
+	}
+	if err == nil {
+		_, execErr := s.db.Exec(`
+INSERT INTO source_health (
+  source_id, last_fetch_at, last_fetch_status, last_imported, last_new, last_updated,
+  failure_streak, disabled_until, last_error, updated_at
+)
+VALUES (?, datetime('now', '+8 hours'), 'success', ?, ?, ?, 0, NULL, NULL, datetime('now', '+8 hours'))
+ON CONFLICT(source_id) DO UPDATE SET
+  last_fetch_at = excluded.last_fetch_at,
+  last_fetch_status = excluded.last_fetch_status,
+  last_imported = excluded.last_imported,
+  last_new = excluded.last_new,
+  last_updated = excluded.last_updated,
+  failure_streak = 0,
+  disabled_until = NULL,
+  last_error = NULL,
+  updated_at = excluded.updated_at`,
+			sourceID, imported, added, updated)
+		return execErr
+	}
+	var streak int
+	_ = s.db.QueryRow("SELECT failure_streak FROM source_health WHERE source_id = ?", sourceID).Scan(&streak)
+	streak++
+	disabledUntilExpr := "NULL"
+	if streak >= 3 {
+		disabledUntilExpr = "datetime('now', '+8 hours', '+60 minutes')"
+	}
+	_, execErr := s.db.Exec(`
+INSERT INTO source_health (
+  source_id, last_fetch_at, last_fetch_status, last_imported, last_new, last_updated,
+  failure_streak, disabled_until, last_error, updated_at
+)
+VALUES (?, datetime('now', '+8 hours'), 'failed', 0, 0, 0, ?, `+disabledUntilExpr+`, ?, datetime('now', '+8 hours'))
+ON CONFLICT(source_id) DO UPDATE SET
+  last_fetch_at = excluded.last_fetch_at,
+  last_fetch_status = excluded.last_fetch_status,
+  last_imported = 0,
+  last_new = 0,
+  last_updated = 0,
+  failure_streak = excluded.failure_streak,
+  disabled_until = excluded.disabled_until,
+  last_error = excluded.last_error,
+  updated_at = excluded.updated_at`,
+		sourceID, streak, err.Error())
+	return execErr
+}
+
+func (s *store) SourceCoolingDown(sourceID string) (bool, string, error) {
+	var disabledUntil string
+	err := s.db.QueryRow(`
+SELECT COALESCE(disabled_until, '')
+FROM source_health
+WHERE source_id = ?
+  AND disabled_until IS NOT NULL
+  AND disabled_until > datetime('now', '+8 hours')`, strings.TrimSpace(sourceID)).Scan(&disabledUntil)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	return true, disabledUntil, nil
+}
+
+func (s *store) RecordMaintenanceEvent(action string, count int64, targetProfile string, reason string, settings appSettings) error {
+	if count == 0 {
+		return nil
+	}
+	raw, _ := json.Marshal(settings)
+	_, err := s.db.Exec(`
+INSERT INTO maintenance_events (action, count, target_profile, reason, settings_snapshot, created_at)
+VALUES (?, ?, ?, ?, ?, datetime('now', '+8 hours'))`,
+		strings.TrimSpace(action), count, strings.TrimSpace(targetProfile), strings.TrimSpace(reason), string(raw))
+	return err
 }
 
 func (s *store) upsertProxy(tx *sql.Tx, proxy parsedProxy, source string) (bool, error) {
@@ -993,6 +1131,9 @@ func scanProxy(rows *sql.Rows) (proxyRecord, error) {
 	}
 	item.CloudflareStatus = nullStringPtr(cloudflare)
 	item.LastError = nullStringPtr(lastError)
+	if item.LastError != nil {
+		item.FailureReason = failureReasonFromMessage(*item.LastError)
+	}
 	item.LastCheckedAt = nullStringPtr(lastChecked)
 	return item, nil
 }
@@ -1137,6 +1278,13 @@ func nullStringPtr(value sql.NullString) *string {
 	}
 	text := value.String
 	return &text
+}
+
+func nullStringValue(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }
 
 func boolToInt(value bool) int {

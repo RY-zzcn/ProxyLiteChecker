@@ -193,6 +193,52 @@ func TestCountAvailableProxyURLsDeduplicatesDetectedProtocol(t *testing.T) {
 	}
 }
 
+func TestSourceHealthFailureCooldownAndRecovery(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := st.RecordSourceFetch("source_a", 0, 0, 0, errTestSourceFetch); err != nil {
+			t.Fatalf("record failed source fetch: %v", err)
+		}
+	}
+	coolingDown, disabledUntil, err := st.SourceCoolingDown("source_a")
+	if err != nil {
+		t.Fatalf("source cooling down: %v", err)
+	}
+	if !coolingDown || disabledUntil == "" {
+		t.Fatalf("expected source cooldown, cooling=%v until=%q", coolingDown, disabledUntil)
+	}
+	if err := st.RecordSourceFetch("source_a", 10, 4, 6, nil); err != nil {
+		t.Fatalf("record successful source fetch: %v", err)
+	}
+	coolingDown, _, err = st.SourceCoolingDown("source_a")
+	if err != nil {
+		t.Fatalf("source cooling down after recovery: %v", err)
+	}
+	if coolingDown {
+		t.Fatalf("expected successful fetch to clear source cooldown")
+	}
+	health, err := st.SourceHealth()
+	if err != nil {
+		t.Fatalf("source health: %v", err)
+	}
+	item := health["source_a"]
+	if item["failure_streak"] != 0 || item["last_new"] != 4 || item["last_updated"] != 6 {
+		t.Fatalf("unexpected source health after recovery: %#v", item)
+	}
+}
+
+var errTestSourceFetch = testError("fetch failed")
+
+type testError string
+
+func (e testError) Error() string { return string(e) }
+
 func targetStatsForTest(t *testing.T, stats map[string]any, profile string) map[string]any {
 	t.Helper()
 	targets, ok := stats["by_target"].([]map[string]any)

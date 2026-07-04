@@ -105,7 +105,7 @@ ghcr.io/ry-zzcn/proxylitechecker
 | 标签 | 说明 |
 | --- | --- |
 | `latest` | `main` 分支最新镜像 |
-| `v0.2.4` / 其它 `v*` | 对应版本镜像 |
+| `v0.3.0` / 其它 `v*` | 对应版本镜像 |
 | `0.2` | `0.2.x` 小版本线最新镜像，会随后续 `v0.2.x` 自动前移 |
 
 查看仓库 Packages 页面：
@@ -214,9 +214,21 @@ Unblock-File .\proxylite-windows-amd64.exe
 | `PLC_SOCKS5_GATEWAY_HOST` | `0.0.0.0` | SOCKS5 网关绑定地址 |
 | `PLC_SOCKS5_GATEWAY_PORT` | `18081` | 首个 SOCKS5 目标入口端口 |
 | `PLC_GATEWAY_SOCKS5_PROFILE_PORTS` | 空 | 覆盖 SOCKS5 目标端口，如 `openai:18083,claude:18089` |
+| `PLC_GATEWAY_UPSTREAM_LIMIT` | `200` | 每个目标最多装载的唯一上游数量 |
+| `PLC_GATEWAY_UPSTREAM_STRATEGY` | `round_robin` | 网关上游选择策略：`round_robin`、`lowest_latency`、`stability_first` |
+| `PLC_GATEWAY_RETRY_ATTEMPTS` | `2` | CONNECT/SOCKS5 和无请求体 HTTP 请求的上游失败重试次数 |
+| `PLC_GATEWAY_FAILURE_THRESHOLD` | `3` | 单个上游连续失败多少次后临时隔离 |
+| `PLC_GATEWAY_FAILURE_COOLDOWN_SECONDS` | `300` | 上游失败隔离冷却秒数 |
+| `PLC_GATEWAY_REQUEST_TIMEOUT_SECONDS` | `20` | 网关上游请求/拨号超时秒数 |
+
+`lowest_latency` 使用最近一次检测保存的延迟排序，不会在每个网关请求路径上重新测速。
 
 默认网关监听 `0.0.0.0` 是为了方便本机 Docker 容器和同网络服务访问。公网部署时建议用防火墙或安全组限制 `18080-18089` 的访问来源，避免把代理网关暴露成开放代理。
 
 ## 与 ProxyPoolChecker 的区别
 
 ProxyPoolChecker 适合集中管理多台检测节点；ProxyLiteChecker 适合单机自用。这里没有节点列表、节点排序、agent 安装命令、心跳和分布式检测调度。所有任务都在当前进程内完成，结果只代表当前机器到代理和目标服务的链路质量。
+
+## 运维
+
+systemd、备份恢复、本地更新和 preflight 检查见 `docs/deployment.md`。

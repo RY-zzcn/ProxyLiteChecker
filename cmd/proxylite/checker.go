@@ -450,7 +450,7 @@ func checkWithClient(ctx context.Context, proxyID int, targetProfile string, pro
 	recommended := recommendUse(targetProfile, baseReachable, serviceReachable, apiReachable, status)
 	var lastError *string
 	if status == "failed" {
-		msg := "proxy check failed"
+		msg := formatFailureError("target_unreachable", "proxy check failed")
 		lastError = &msg
 	}
 	return singleCheckResult{CheckResult: CheckResult{
@@ -894,6 +894,7 @@ func exitIPTargets() []string {
 }
 
 func failedResult(proxyID int, profile string, message string) CheckResult {
+	reason := classifyFailureReason(message)
 	return CheckResult{
 		ProxyID:        proxyID,
 		Status:         "failed",
@@ -901,7 +902,7 @@ func failedResult(proxyID int, profile string, message string) CheckResult {
 		SuccessRate:    0,
 		TargetProfile:  profile,
 		RecommendedUse: "invalid",
-		LastError:      stringPtr(message),
+		LastError:      stringPtr(formatFailureError(reason, message)),
 	}
 }
 
@@ -973,9 +974,65 @@ func combineRoundResults(profile string, results []singleCheckResult) CheckResul
 	output.RecommendedUse = recommendUse(profile, baseReachable, serviceReachable, apiReachable, status)
 	if status == "failed" {
 		message := "available_rounds=" + strconv.Itoa(len(available)) + "/" + strconv.Itoa(len(results))
+		message = formatFailureError("rounds", message)
 		output.LastError = &message
 	}
 	return output
+}
+
+func formatFailureError(reason string, message string) string {
+	reason = strings.TrimSpace(reason)
+	message = strings.TrimSpace(message)
+	if reason == "" {
+		reason = "unknown"
+	}
+	if strings.HasPrefix(message, "[") {
+		return message
+	}
+	if message == "" {
+		message = "proxy check failed"
+	}
+	return "[" + reason + "] " + message
+}
+
+func failureReasonFromMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if strings.HasPrefix(message, "[") {
+		if end := strings.Index(message, "]"); end > 1 {
+			return strings.TrimSpace(message[1:end])
+		}
+	}
+	return classifyFailureReason(message)
+}
+
+func classifyFailureReason(message string) string {
+	text := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case text == "":
+		return "unknown"
+	case strings.Contains(text, "timeout") || strings.Contains(text, "deadline exceeded") || strings.Contains(text, "i/o timeout"):
+		return "timeout"
+	case strings.Contains(text, "no such host") || strings.Contains(text, "dns"):
+		return "dns"
+	case strings.Contains(text, "tls") || strings.Contains(text, "certificate") || strings.Contains(text, "handshake failure"):
+		return "tls"
+	case strings.Contains(text, "authentication failed") || strings.Contains(text, "proxy authentication") || strings.Contains(text, "407"):
+		return "proxy_auth"
+	case strings.Contains(text, "connection refused") || strings.Contains(text, "connect: cannot assign requested address") || strings.Contains(text, "network is unreachable"):
+		return "tcp"
+	case strings.Contains(text, "http ") || strings.Contains(text, "status"):
+		return "http_status"
+	case strings.Contains(text, "keyword"):
+		return "keyword_mismatch"
+	case strings.Contains(text, "cloudflare"):
+		return "cloudflare"
+	case strings.Contains(text, "probe failed") || strings.Contains(text, "target") || strings.Contains(text, "available_rounds"):
+		return "target_unreachable"
+	case strings.Contains(text, "unsupported proxy scheme") || strings.Contains(text, "protocol detection"):
+		return "proxy_protocol"
+	default:
+		return "network"
+	}
 }
 
 func gradeResult(latency *int, successRate float64, serviceReachable bool, apiReachable *bool) string {

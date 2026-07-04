@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	appVersion           = "0.2.4"
+	appVersion           = "0.3.0"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -45,6 +45,11 @@ type config struct {
 	Socks5GatewayHost         string
 	Socks5GatewayPort         int
 	GatewayUpstreamLimit      int
+	GatewayRetryAttempts      int
+	GatewayFailureThreshold   int
+	GatewayFailureCooldownS   int
+	GatewayUpstreamStrategy   string
+	GatewayRequestTimeoutS    int
 	GatewayTargetProfiles     []string
 	GatewayHTTPProfilePorts   map[string]int
 	GatewaySocks5ProfilePorts map[string]int
@@ -76,12 +81,21 @@ func main() {
 			Socks5Host:         srv.cfg.Socks5GatewayHost,
 			Socks5Port:         srv.cfg.Socks5GatewayPort,
 			UpstreamLimit:      srv.cfg.GatewayUpstreamLimit,
-			RequestTimeoutS:    20,
+			RequestTimeoutS:    srv.cfg.GatewayRequestTimeoutS,
+			RetryAttempts:      srv.cfg.GatewayRetryAttempts,
+			FailureThreshold:   srv.cfg.GatewayFailureThreshold,
+			FailureCooldownS:   srv.cfg.GatewayFailureCooldownS,
+			UpstreamStrategy:   srv.cfg.GatewayUpstreamStrategy,
 			TargetProfiles:     srv.cfg.GatewayTargetProfiles,
 			HTTPProfilePorts:   srv.cfg.GatewayHTTPProfilePorts,
 			Socks5ProfilePorts: srv.cfg.GatewaySocks5ProfilePorts,
 			ProfilePortStride:  srv.cfg.GatewayProfilePortStride,
 		})
+		if settings, err := srv.store.AppSettings(); err == nil {
+			srv.applyGatewaySettings(settings)
+		} else {
+			log.Printf("load gateway settings failed: %v", err)
+		}
 		go func() {
 			if err := srv.gateway.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("local gateway stopped: %v", err)
@@ -120,6 +134,11 @@ func loadConfig() config {
 		Socks5GatewayHost:         envString("PLC_SOCKS5_GATEWAY_HOST", envString("PLC_GATEWAY_HOST", "0.0.0.0")),
 		Socks5GatewayPort:         clampInt(envInt("PLC_SOCKS5_GATEWAY_PORT", 18081), 1, 65535),
 		GatewayUpstreamLimit:      clampInt(envInt("PLC_GATEWAY_UPSTREAM_LIMIT", 200), 1, 2000),
+		GatewayRetryAttempts:      clampInt(envInt("PLC_GATEWAY_RETRY_ATTEMPTS", gatewayDefaultRetryAttempts), 1, 5),
+		GatewayFailureThreshold:   clampInt(envInt("PLC_GATEWAY_FAILURE_THRESHOLD", gatewayDefaultFailureThreshold), 1, 100),
+		GatewayFailureCooldownS:   clampInt(envInt("PLC_GATEWAY_FAILURE_COOLDOWN_SECONDS", gatewayDefaultFailureCooldownS), 1, 86400),
+		GatewayUpstreamStrategy:   normalizeGatewayUpstreamStrategy(envString("PLC_GATEWAY_UPSTREAM_STRATEGY", gatewayStrategyRoundRobin)),
+		GatewayRequestTimeoutS:    clampInt(envInt("PLC_GATEWAY_REQUEST_TIMEOUT_SECONDS", 20), 2, 120),
 		GatewayTargetProfiles:     gatewayTargetProfilesFromEnv(),
 		GatewayHTTPProfilePorts:   gatewayProfilePortMapFromEnv("PLC_GATEWAY_HTTP_PROFILE_PORTS"),
 		GatewaySocks5ProfilePorts: gatewayProfilePortMapFromEnv("PLC_GATEWAY_SOCKS5_PROFILE_PORTS"),
@@ -210,6 +229,7 @@ func (s *server) routes() {
 	s.mux.HandleFunc("POST /api/settings", s.withAuth(s.handleSaveSettings))
 	s.mux.HandleFunc("GET /api/stats", s.withAuth(s.handleStats))
 	s.mux.HandleFunc("GET /api/sources", s.withAuth(s.handleSources))
+	s.mux.HandleFunc("GET /api/target-profiles", s.withAuth(s.handleTargetProfiles))
 	s.mux.HandleFunc("POST /api/sources/fetch-job", s.withAuth(s.handleFetchSourcesJob))
 	s.mux.HandleFunc("GET /api/proxies", s.withAuth(s.handleProxies))
 	s.mux.HandleFunc("POST /api/proxies/import", s.withAuth(s.handleImportProxies))
@@ -219,6 +239,8 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /api/jobs/{job_id}", s.withAuth(s.handleJobStatus))
 	s.mux.HandleFunc("POST /api/jobs/{job_id}/cancel", s.withAuth(s.handleCancelJob))
 	s.mux.HandleFunc("GET /api/gateway/status", s.withAuth(s.handleGatewayStatus))
+	s.mux.HandleFunc("GET /api/gateway/config", s.withAuth(s.handleGetGatewayConfig))
+	s.mux.HandleFunc("POST /api/gateway/config", s.withAuth(s.handleSaveGatewayConfig))
 	s.mux.HandleFunc("GET /api/export/proxies.txt", s.withExportAuth(s.handleExportTXT))
 	s.mux.HandleFunc("GET /api/export/proxies.json", s.withExportAuth(s.handleExportJSON))
 	s.mux.HandleFunc("GET /static/", s.handleStatic)
@@ -304,7 +326,7 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 			"version": s.cfg.AppVersion,
 		},
 		"stats":     stats,
-		"sources":   builtinSources(),
+		"sources":   s.sourcesPayload(),
 		"settings":  settings,
 		"scheduler": s.scheduler.Status(settings),
 		"gateway":   s.gatewayPayload(),
@@ -347,6 +369,7 @@ func (s *server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.applyGatewaySettings(settings)
 	s.scheduler.Reset(settings)
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"settings":  settings,
@@ -364,7 +387,52 @@ func (s *server) handleStats(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) handleSources(w http.ResponseWriter, _ *http.Request) {
-	jsonResponse(w, http.StatusOK, map[string]any{"items": builtinSources()})
+	jsonResponse(w, http.StatusOK, map[string]any{"items": s.sourcesPayload()})
+}
+
+func (s *server) handleTargetProfiles(w http.ResponseWriter, _ *http.Request) {
+	items := make([]map[string]any, 0, len(targetProfileOrder))
+	for _, profile := range targetProfileOrder {
+		cfg := targetProfiles[profile]
+		items = append(items, map[string]any{
+			"id":                profile,
+			"label":             targetProfileLabel(profile),
+			"service_url":       cfg.ServiceURL,
+			"api_url":           cfg.APIURL,
+			"expected_statuses": cfg.ExpectedStatuses,
+			"keyword":           cfg.Keyword,
+			"timeout_seconds":   cfg.TimeoutSeconds,
+			"enabled":           true,
+		})
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *server) sourcesPayload() []map[string]any {
+	health, err := s.store.SourceHealth()
+	if err != nil {
+		health = map[string]map[string]any{}
+	}
+	sources := builtinSources()
+	out := make([]map[string]any, 0, len(sources))
+	for _, source := range sources {
+		item := map[string]any{
+			"id":               source.ID,
+			"name":             source.Name,
+			"url":              source.URL,
+			"default_protocol": source.DefaultProtocol,
+			"parser":           source.Parser,
+			"enabled":          source.Enabled,
+		}
+		if h, ok := health[source.ID]; ok {
+			item["health"] = h
+			for key, value := range h {
+				item[key] = value
+			}
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (s *server) handleFetchSourcesJob(w http.ResponseWriter, r *http.Request) {
@@ -458,6 +526,69 @@ func (s *server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleGatewayStatus(w http.ResponseWriter, _ *http.Request) {
 	jsonResponse(w, http.StatusOK, s.gatewayPayload())
+}
+
+func (s *server) handleGetGatewayConfig(w http.ResponseWriter, _ *http.Request) {
+	settings, err := s.store.AppSettings()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"config": gatewayConfigPayload(settings, s.gatewayPayload())})
+}
+
+func (s *server) handleSaveGatewayConfig(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]any
+	if err := readJSON(r, &payload); err != nil {
+		errorResponse(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	current, err := s.store.AppSettings()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	settings, err := s.store.SaveAppSettings(settingsFromPayload(current, payload))
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.applyGatewaySettings(settings)
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"config":  gatewayConfigPayload(settings, s.gatewayPayload()),
+		"gateway": s.gatewayPayload(),
+	})
+}
+
+func (s *server) applyGatewaySettings(settings appSettings) {
+	if s.gateway == nil {
+		return
+	}
+	cfg := s.gateway.configSnapshot()
+	cfg.UpstreamLimit = settings.GatewayUpstreamLimit
+	cfg.UpstreamStrategy = settings.GatewayUpstreamStrategy
+	cfg.RetryAttempts = settings.GatewayRetryAttempts
+	cfg.FailureThreshold = settings.GatewayFailureThreshold
+	cfg.FailureCooldownS = settings.GatewayFailureCooldownS
+	cfg.RequestTimeoutS = settings.GatewayRequestTimeoutS
+	s.gateway.ApplyRuntimeConfig(cfg)
+}
+
+func gatewayConfigPayload(settings appSettings, status map[string]any) map[string]any {
+	return map[string]any{
+		"upstream_limit":                     settings.GatewayUpstreamLimit,
+		"upstream_strategy":                  settings.GatewayUpstreamStrategy,
+		"retry_attempts":                     settings.GatewayRetryAttempts,
+		"failure_threshold":                  settings.GatewayFailureThreshold,
+		"failure_cooldown_seconds":           settings.GatewayFailureCooldownS,
+		"request_timeout_seconds":            settings.GatewayRequestTimeoutS,
+		"effective_upstream_limit":           status["upstream_limit"],
+		"effective_upstream_strategy":        status["upstream_strategy"],
+		"effective_retry_attempts":           status["retry_attempts"],
+		"effective_failure_threshold":        status["failure_threshold"],
+		"effective_failure_cooldown_seconds": status["failure_cooldown_seconds"],
+		"effective_request_timeout_seconds":  status["request_timeout_seconds"],
+	}
 }
 
 func (s *server) gatewayPayload() map[string]any {

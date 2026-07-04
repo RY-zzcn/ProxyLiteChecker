@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.2.4</span> · 额丶Y</small>
+            <small><span id="versionText">v0.3.0</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -346,6 +346,53 @@
                 </div>
               </div>
             </section>
+
+            <section class="settings-group gateway-settings-group">
+              <div class="settings-group-head">
+                <strong>网关运行时</strong>
+                <span>上游选择、重试和隔离策略</span>
+              </div>
+              <div class="settings-group-body">
+                <div class="mini-grid three">
+                  <label>
+                    单目标上限
+                    <input id="gatewayUpstreamLimit" type="number" min="1" max="2000" />
+                  </label>
+                  <label>
+                    策略
+                    <select id="gatewayUpstreamStrategy">
+                      <option value="round_robin">轮询</option>
+                      <option value="lowest_latency">低延迟</option>
+                      <option value="stability_first">稳定优先</option>
+                    </select>
+                  </label>
+                  <label>
+                    请求超时
+                    <div class="unit-field">
+                      <input id="gatewayRequestTimeout" type="number" min="2" max="120" />
+                      <span>s</span>
+                    </div>
+                  </label>
+                </div>
+                <div class="mini-grid three">
+                  <label>
+                    重试次数
+                    <input id="gatewayRetryAttempts" type="number" min="1" max="5" />
+                  </label>
+                  <label>
+                    隔离阈值
+                    <input id="gatewayFailureThreshold" type="number" min="1" max="100" />
+                  </label>
+                  <label>
+                    隔离冷却
+                    <div class="unit-field">
+                      <input id="gatewayFailureCooldown" type="number" min="1" max="86400" />
+                      <span>s</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
       </section>
@@ -359,6 +406,7 @@
         </div>
         <section id="gatewayCards" class="gateway-card-grid">
         </section>
+        <div id="gatewayEvents" class="gateway-events"></div>
       </section>
 
       <section class="panel proxies-panel">
