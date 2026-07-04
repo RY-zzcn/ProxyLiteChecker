@@ -379,9 +379,11 @@ function renderGateway(gateway) {
   const uniqueAvailable = Number(
     gateway.unique_available_upstreams ?? gateway.available_upstreams ?? profiles.reduce((total, item) => total + gatewayAvailableUpstreams(item), 0),
   );
+  const upstreamLimit = gatewayUpstreamLimit(gateway, profiles);
+  const limitText = upstreamLimit > 0 ? `单目标上限 ${upstreamLimit}（修改后重启生效）` : "单目标上限未设置";
   const totalRequests = Number(gateway.total_requests || profiles.reduce((total, item) => total + Number(item.total_requests || 0), 0));
   el("gatewaySummary").textContent = gateway.enabled
-    ? `${enabledProfiles.length} 个目标入口 · 已装载 ${loadedSlots} 个目标槽位 · 唯一可用 ${uniqueAvailable} 个上游 · 入口请求 ${totalRequests}`
+    ? `${enabledProfiles.length} 个目标入口 · ${limitText} · 已装载 ${loadedSlots} 个目标槽位 · 唯一可用 ${uniqueAvailable} 个上游 · 入口请求 ${totalRequests}`
     : "网关未启用";
   el("gatewayCards").innerHTML =
     profiles
@@ -389,7 +391,18 @@ function renderGateway(gateway) {
       .join("") || `<article class="gateway-card empty-row">网关未启用</article>`;
   const pill = el("gatewayPill");
   pill.textContent = gateway.enabled ? `网关 ${enabledProfiles.length} 目标 · ${loadedSlots} 槽位 · ${uniqueAvailable} 上游` : "网关未启用";
+  pill.title = gateway.enabled ? `${limitText}；通过 PLC_GATEWAY_UPSTREAM_LIMIT 修改` : "";
   pill.classList.toggle("offline", !gateway.enabled);
+}
+
+function gatewayUpstreamLimit(gateway, profiles) {
+  const direct = Number(gateway?.upstream_limit || 0);
+  if (direct > 0) return direct;
+  for (const item of profiles || []) {
+    const value = Number(item?.upstream_limit || 0);
+    if (value > 0) return value;
+  }
+  return 0;
 }
 
 function gatewayLoadedUpstreams(item) {

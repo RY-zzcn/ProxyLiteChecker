@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 - 2026-07-04
+
+- Show the active per-target gateway upstream limit in the local gateway summary.
+- Add a restart-required hint for changes to `PLC_GATEWAY_UPSTREAM_LIMIT`.
+- Add the same upstream-limit hint to the gateway status pill hover text.
+
 ## 0.2.2 - 2026-07-04
 
 - Count dashboard available proxies as unique usable upstream URLs across all target checks, with the previous record count kept separately for diagnostics.
