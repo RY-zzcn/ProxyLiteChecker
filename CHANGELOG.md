@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 - 2026-07-04
+
+- Count dashboard available proxies as unique usable upstream URLs across all target checks, with the previous record count kept separately for diagnostics.
+- Report local gateway loaded target slots, unique available upstreams, and per-target available counts separately so repeated target coverage is not misread as extra global inventory.
+- Deduplicate gateway upstreams before applying the per-target upstream limit, so each target can load the full configured number of unique upstreams.
+- Apply TXT export limits after deduplication and add tests for target-aware availability statistics and gateway aggregation.
+
 ## 0.2.1 - 2026-07-03
 
 - Show local gateway recent upstreams as a stable five-row newest-first list with the current/latest proxy first.

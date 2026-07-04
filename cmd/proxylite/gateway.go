@@ -152,13 +152,23 @@ func (g *gatewayServer) Status() map[string]any {
 	success := int64(0)
 	failed := int64(0)
 	upstreamCount := 0
+	targetAvailableUpstreamCount := 0
+	targetProfiles := make([]string, 0, len(g.endpoints))
 	for _, endpoint := range g.endpoints {
 		item := g.endpointStatus(endpoint)
 		profiles = append(profiles, item)
+		targetProfiles = append(targetProfiles, endpoint.TargetProfile)
 		total += atomic.LoadInt64(&endpoint.totalRequests)
 		success += atomic.LoadInt64(&endpoint.successRequests)
 		failed += atomic.LoadInt64(&endpoint.failedRequests)
 		upstreamCount += anyToInt(item["upstreams"])
+		targetAvailableUpstreamCount += anyToInt(item["available_upstreams"])
+	}
+	uniqueAvailableUpstreamCount := targetAvailableUpstreamCount
+	if g.store != nil {
+		if count, err := g.store.CountAvailableProxyURLsForProfiles(targetProfiles); err == nil {
+			uniqueAvailableUpstreamCount = count
+		}
 	}
 	successRate := 0.0
 	if total > 0 {
@@ -169,25 +179,30 @@ func (g *gatewayServer) Status() map[string]any {
 		primary = profiles[0]
 	}
 	return map[string]any{
-		"bind":             primary["http_bind"],
-		"http_bind":        primary["http_bind"],
-		"http_host":        primary["http_host"],
-		"http_port":        primary["http_port"],
-		"socks5_enabled":   g.cfg.Socks5Enabled,
-		"socks5_bind":      primary["socks5_bind"],
-		"socks5_host":      primary["socks5_host"],
-		"socks5_port":      primary["socks5_port"],
-		"target_profile":   primary["target_profile"],
-		"upstreams":        upstreamCount,
-		"total_requests":   total,
-		"success_requests": success,
-		"failed_requests":  failed,
-		"success_rate":     successRate,
-		"last_upstream":    primary["last_upstream"],
-		"recent_upstreams": primary["recent_upstreams"],
-		"last_error":       primary["last_error"],
-		"profiles":         profiles,
-		"started_at":       g.startedAt,
+		"bind":                       primary["http_bind"],
+		"http_bind":                  primary["http_bind"],
+		"http_host":                  primary["http_host"],
+		"http_port":                  primary["http_port"],
+		"socks5_enabled":             g.cfg.Socks5Enabled,
+		"socks5_bind":                primary["socks5_bind"],
+		"socks5_host":                primary["socks5_host"],
+		"socks5_port":                primary["socks5_port"],
+		"target_profile":             primary["target_profile"],
+		"upstreams":                  upstreamCount,
+		"loaded_upstreams":           upstreamCount,
+		"available_upstreams":        uniqueAvailableUpstreamCount,
+		"unique_available_upstreams": uniqueAvailableUpstreamCount,
+		"target_available_upstreams": targetAvailableUpstreamCount,
+		"upstream_limit":             g.cfg.UpstreamLimit,
+		"total_requests":             total,
+		"success_requests":           success,
+		"failed_requests":            failed,
+		"success_rate":               successRate,
+		"last_upstream":              primary["last_upstream"],
+		"recent_upstreams":           primary["recent_upstreams"],
+		"last_error":                 primary["last_error"],
+		"profiles":                   profiles,
+		"started_at":                 g.startedAt,
 	}
 }
 
@@ -200,31 +215,42 @@ func (g *gatewayServer) endpointStatus(endpoint *gatewayEndpoint) map[string]any
 		successRate = float64(success) / float64(total)
 	}
 	upstreamCount := 0
+	availableUpstreamCount := 0
 	if g.store != nil {
 		items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, endpoint.TargetProfile)
 		if err == nil {
 			upstreamCount = len(items)
 		}
+		total, err := g.store.CountAvailableProxyURLs(endpoint.TargetProfile)
+		if err == nil {
+			availableUpstreamCount = total
+		} else {
+			availableUpstreamCount = upstreamCount
+		}
 	}
 	return map[string]any{
-		"target_profile":   endpoint.TargetProfile,
-		"label":            targetProfileLabel(endpoint.TargetProfile),
-		"http_enabled":     endpoint.HTTPPort > 0 && endpoint.http != nil,
-		"http_bind":        net.JoinHostPort(endpoint.HTTPHost, strconv.Itoa(endpoint.HTTPPort)),
-		"http_host":        endpoint.HTTPHost,
-		"http_port":        endpoint.HTTPPort,
-		"socks5_enabled":   endpoint.Socks5Port > 0 && endpoint.socks5Listener != nil,
-		"socks5_bind":      net.JoinHostPort(endpoint.Socks5Host, strconv.Itoa(endpoint.Socks5Port)),
-		"socks5_host":      endpoint.Socks5Host,
-		"socks5_port":      endpoint.Socks5Port,
-		"upstreams":        upstreamCount,
-		"total_requests":   total,
-		"success_requests": success,
-		"failed_requests":  failed,
-		"success_rate":     successRate,
-		"last_upstream":    valueString(endpoint.lastUpstream.Load()),
-		"recent_upstreams": endpoint.recentSnapshot(),
-		"last_error":       valueString(endpoint.lastError.Load()),
+		"target_profile":      endpoint.TargetProfile,
+		"label":               targetProfileLabel(endpoint.TargetProfile),
+		"http_enabled":        endpoint.HTTPPort > 0 && endpoint.http != nil,
+		"http_bind":           net.JoinHostPort(endpoint.HTTPHost, strconv.Itoa(endpoint.HTTPPort)),
+		"http_host":           endpoint.HTTPHost,
+		"http_port":           endpoint.HTTPPort,
+		"socks5_enabled":      endpoint.Socks5Port > 0 && endpoint.socks5Listener != nil,
+		"socks5_bind":         net.JoinHostPort(endpoint.Socks5Host, strconv.Itoa(endpoint.Socks5Port)),
+		"socks5_host":         endpoint.Socks5Host,
+		"socks5_port":         endpoint.Socks5Port,
+		"upstreams":           upstreamCount,
+		"loaded_upstreams":    upstreamCount,
+		"available_upstreams": availableUpstreamCount,
+		"upstream_limit":      g.cfg.UpstreamLimit,
+		"upstream_limited":    availableUpstreamCount > upstreamCount,
+		"total_requests":      total,
+		"success_requests":    success,
+		"failed_requests":     failed,
+		"success_rate":        successRate,
+		"last_upstream":       valueString(endpoint.lastUpstream.Load()),
+		"recent_upstreams":    endpoint.recentSnapshot(),
+		"last_error":          valueString(endpoint.lastError.Load()),
 	}
 }
 

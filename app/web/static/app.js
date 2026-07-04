@@ -3,6 +3,7 @@ const state = {
   sources: [],
   settings: null,
   scheduler: null,
+  stats: null,
   activeJob: null,
   pollTimer: null,
   gatewayTimer: null,
@@ -271,10 +272,20 @@ async function bootstrap() {
 }
 
 function renderStats(stats) {
+  state.stats = stats || {};
   el("statTotal").textContent = stats.total || 0;
   el("statAvailable").textContent = stats.available || 0;
   el("statUntested").textContent = stats.untested || 0;
   el("statFailed").textContent = stats.failed || 0;
+  const targetText = (stats.by_target || [])
+    .filter((item) => Number(item.available || 0) > 0)
+    .map((item) => `${targetLabel(item.target_profile)} ${Number(item.available || 0)}`)
+    .join(" / ");
+  const availableMetric = el("statAvailable").closest(".metric");
+  if (availableMetric) {
+    const recordText = Number(stats.available_records || 0) > Number(stats.available || 0) ? `；记录 ${Number(stats.available_records || 0)}` : "";
+    availableMetric.title = targetText ? `目标可用上游：${targetText}${recordText}` : "按唯一上游统计";
+  }
 }
 
 function renderSources() {
@@ -364,24 +375,52 @@ function updateSelectedSources() {
 function renderGateway(gateway) {
   const profiles = (gateway.profiles || []).length ? gateway.profiles : [gateway];
   const enabledProfiles = profiles.filter((item) => item && (item.http_enabled || item.socks5_enabled || gateway.enabled));
-  const upstreams = profiles.reduce((total, item) => total + Number(item.upstreams || 0), 0);
+  const loadedSlots = Number(gateway.loaded_upstreams ?? profiles.reduce((total, item) => total + gatewayLoadedUpstreams(item), 0));
+  const uniqueAvailable = Number(
+    gateway.unique_available_upstreams ?? gateway.available_upstreams ?? profiles.reduce((total, item) => total + gatewayAvailableUpstreams(item), 0),
+  );
   const totalRequests = Number(gateway.total_requests || profiles.reduce((total, item) => total + Number(item.total_requests || 0), 0));
   el("gatewaySummary").textContent = gateway.enabled
-    ? `${enabledProfiles.length} 个目标入口 · ${upstreams} 个可用上游 · 最近请求 ${totalRequests}`
+    ? `${enabledProfiles.length} 个目标入口 · 已装载 ${loadedSlots} 个目标槽位 · 唯一可用 ${uniqueAvailable} 个上游 · 入口请求 ${totalRequests}`
     : "网关未启用";
   el("gatewayCards").innerHTML =
     profiles
       .map((item) => gatewayCardHTML(item, gateway.enabled))
       .join("") || `<article class="gateway-card empty-row">网关未启用</article>`;
   const pill = el("gatewayPill");
-  pill.textContent = gateway.enabled ? `网关 ${enabledProfiles.length} 目标 · ${upstreams} 上游` : "网关未启用";
+  pill.textContent = gateway.enabled ? `网关 ${enabledProfiles.length} 目标 · ${loadedSlots} 槽位 · ${uniqueAvailable} 上游` : "网关未启用";
   pill.classList.toggle("offline", !gateway.enabled);
+}
+
+function gatewayLoadedUpstreams(item) {
+  return Number(item?.loaded_upstreams ?? item?.upstreams ?? 0);
+}
+
+function gatewayAvailableUpstreams(item) {
+  const loaded = gatewayLoadedUpstreams(item);
+  return Number(item?.available_upstreams ?? loaded);
+}
+
+function gatewayUpstreamSummary(loaded, available) {
+  if (available > loaded) {
+    return `已装载 ${loaded}/${available} 个上游`;
+  }
+  return `${loaded} 个上游`;
+}
+
+function gatewayUpstreamPill(loaded, available) {
+  if (available > loaded) {
+    return `${loaded}/${available} 上游`;
+  }
+  return `${loaded} 上游`;
 }
 
 function gatewayCardHTML(item, gatewayEnabled) {
   const profile = item.target_profile || "generic";
   const httpBind = gatewayEnabled && item.http_enabled !== false ? displayGatewayBind(item, "http") : "未启用";
   const socks5Bind = gatewayEnabled && item.socks5_enabled ? displayGatewayBind(item, "socks5") : "未启用";
+  const loadedUpstreams = gatewayLoadedUpstreams(item);
+  const availableUpstreams = gatewayAvailableUpstreams(item);
   const recent = gatewayRecentRows(item)
     .map(
       (entry, index) => `
@@ -396,7 +435,7 @@ function gatewayCardHTML(item, gatewayEnabled) {
     <article class="gateway-card">
       <div class="gateway-card-head">
         <strong>${escapeHtml(targetLabel(profile))}</strong>
-        <span>${Number(item.upstreams || 0)} 上游</span>
+        <span>${gatewayUpstreamPill(loadedUpstreams, availableUpstreams)}</span>
       </div>
       <div class="endpoint-pair">
         <div class="endpoint-row">
@@ -415,7 +454,7 @@ function gatewayCardHTML(item, gatewayEnabled) {
         </div>
       </div>
       <div class="gateway-card-meta">
-        <span>请求 ${Number(item.total_requests || 0)}</span>
+        <span>入口请求 ${Number(item.total_requests || 0)}</span>
         <span>成功率 ${Math.round(Number(item.success_rate || 0) * 100)}%</span>
       </div>
       <div class="recent-list">${recent}</div>

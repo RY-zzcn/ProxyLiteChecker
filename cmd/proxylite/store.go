@@ -244,7 +244,7 @@ func (s *store) Stats() (map[string]any, error) {
 		"untested":  0,
 		"checking":  0,
 	}
-	rows, err := s.db.Query("SELECT status, COUNT(*) FROM proxies GROUP BY status")
+	rows, err := s.db.Query("SELECT status, COUNT(*) FROM proxies WHERE enabled = 1 GROUP BY status")
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,9 @@ func (s *store) Stats() (map[string]any, error) {
 		total += count
 	}
 	stats["total"] = total
-	gradeRows, err := s.db.Query("SELECT grade, COUNT(*) FROM proxies WHERE status = 'available' AND grade != '' GROUP BY grade")
+	availableRecords := anyToInt(stats["available"])
+	stats["available_records"] = availableRecords
+	gradeRows, err := s.db.Query("SELECT grade, COUNT(*) FROM proxies WHERE enabled = 1 AND status = 'available' AND grade != '' GROUP BY grade")
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +277,107 @@ func (s *store) Stats() (map[string]any, error) {
 		byGrade[grade] = count
 	}
 	stats["by_grade"] = byGrade
+	byTarget, err := s.TargetStats()
+	if err != nil {
+		return nil, err
+	}
+	stats["by_target"] = byTarget
+	availableURLs, err := s.CountAvailableProxyURLsForProfiles(targetProfileOrder)
+	if err != nil {
+		return nil, err
+	}
+	if availableURLs == 0 && availableRecords > 0 {
+		availableURLs, err = s.CountAvailableProxyURLs("")
+		if err != nil {
+			return nil, err
+		}
+	}
+	stats["available"] = availableURLs
 	return stats, nil
+}
+
+func (s *store) TargetStats() ([]map[string]any, error) {
+	out := make([]map[string]any, 0, len(targetProfileOrder))
+	for _, profile := range targetProfileOrder {
+		item := map[string]any{
+			"target_profile": profile,
+			"label":          targetProfileLabel(profile),
+			"total":          0,
+			"available":      0,
+			"failed":         0,
+			"untested":       0,
+			"checking":       0,
+			"by_grade":       map[string]int{},
+		}
+		rows, err := s.db.Query(`
+SELECT COALESCE(c.status, 'untested') AS status, COUNT(*)
+FROM proxies p
+LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?
+WHERE p.enabled = 1
+GROUP BY COALESCE(c.status, 'untested')`, profile)
+		if err != nil {
+			return nil, err
+		}
+		total := 0
+		for rows.Next() {
+			var status string
+			var count int
+			if err := rows.Scan(&status, &count); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			item[status] = count
+			total += count
+		}
+		availableRecords := anyToInt(item["available"])
+		item["available_records"] = availableRecords
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		item["total"] = total
+
+		gradeRows, err := s.db.Query(`
+SELECT COALESCE(c.grade, '') AS grade, COUNT(*)
+FROM proxies p
+LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?
+WHERE p.enabled = 1
+  AND COALESCE(c.status, 'untested') = 'available'
+  AND COALESCE(c.grade, '') != ''
+GROUP BY COALESCE(c.grade, '')`, profile)
+		if err != nil {
+			return nil, err
+		}
+		byGrade := map[string]int{}
+		for gradeRows.Next() {
+			var grade string
+			var count int
+			if err := gradeRows.Scan(&grade, &count); err != nil {
+				_ = gradeRows.Close()
+				return nil, err
+			}
+			byGrade[grade] = count
+		}
+		if err := gradeRows.Close(); err != nil {
+			return nil, err
+		}
+		if err := gradeRows.Err(); err != nil {
+			return nil, err
+		}
+		item["by_grade"] = byGrade
+		availableURLs, err := s.CountAvailableProxyURLs(profile)
+		if err != nil {
+			return nil, err
+		}
+		if availableURLs == 0 && availableRecords > 0 {
+			availableURLs = availableRecords
+		}
+		item["available"] = availableURLs
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 func (s *store) ImportProxies(text string, source string, defaultProtocol string) (map[string]any, error) {
@@ -730,6 +832,83 @@ func (s *store) CountProxiesByStatus(status string) (int, error) {
 	return count, err
 }
 
+func (s *store) CountAvailableProxyURLs(targetProfile string) (int, error) {
+	target := strings.ToLower(strings.TrimSpace(targetProfile))
+	if target != "" && target != "all" {
+		target = normalizeTargetProfile(target)
+		query := `
+SELECT COUNT(*) FROM (
+  SELECT
+    CASE
+      WHEN COALESCE(NULLIF(c.detected_protocol, ''), p.protocol, '') IN ('', 'auto') THEN 'http'
+      ELSE COALESCE(NULLIF(c.detected_protocol, ''), p.protocol)
+    END AS protocol,
+    COALESCE(p.username, '') AS username,
+    COALESCE(p.password, '') AS password,
+    LOWER(p.ip) AS ip,
+    p.port
+  FROM proxies p
+  LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?
+  WHERE p.enabled = 1
+    AND COALESCE(c.status, 'untested') = 'available'
+  GROUP BY 1, 2, 3, 4, 5
+)`
+		var count int
+		err := s.db.QueryRow(query, target).Scan(&count)
+		return count, err
+	}
+	query := `
+SELECT COUNT(*) FROM (
+  SELECT
+    CASE
+      WHEN COALESCE(NULLIF(detected_protocol, ''), protocol, '') IN ('', 'auto') THEN 'http'
+      ELSE COALESCE(NULLIF(detected_protocol, ''), protocol)
+    END AS protocol,
+    COALESCE(username, '') AS username,
+    COALESCE(password, '') AS password,
+    LOWER(ip) AS ip,
+    port
+  FROM proxies
+  WHERE enabled = 1
+    AND status = 'available'
+  GROUP BY 1, 2, 3, 4, 5
+)`
+	var count int
+	err := s.db.QueryRow(query).Scan(&count)
+	return count, err
+}
+
+func (s *store) CountAvailableProxyURLsForProfiles(targetProfiles []string) (int, error) {
+	profiles := normalizeTargetProfiles(targetProfiles)
+	placeholders := make([]string, 0, len(profiles))
+	args := make([]any, 0, len(profiles))
+	for _, profile := range profiles {
+		placeholders = append(placeholders, "?")
+		args = append(args, profile)
+	}
+	query := `
+SELECT COUNT(*) FROM (
+  SELECT
+    CASE
+      WHEN COALESCE(NULLIF(c.detected_protocol, ''), p.protocol, '') IN ('', 'auto') THEN 'http'
+      ELSE COALESCE(NULLIF(c.detected_protocol, ''), p.protocol)
+    END AS protocol,
+    COALESCE(p.username, '') AS username,
+    COALESCE(p.password, '') AS password,
+    LOWER(p.ip) AS ip,
+    p.port
+  FROM proxies p
+  JOIN proxy_checks c ON c.proxy_id = p.id
+  WHERE p.enabled = 1
+    AND c.status = 'available'
+    AND c.target_profile IN (` + strings.Join(placeholders, ",") + `)
+  GROUP BY 1, 2, 3, 4, 5
+)`
+	var count int
+	err := s.db.QueryRow(query, args...).Scan(&count)
+	return count, err
+}
+
 func (s *store) ExportAvailable(targetProfile string, limit int) ([]proxyRecord, error) {
 	profiles := normalizeTargetProfilesOrNil(targetProfile)
 	if len(profiles) > 0 {
@@ -765,7 +944,7 @@ func (s *store) ExportAvailableForProfiles(targetProfiles []string, limit int) (
 }
 
 func (s *store) AvailableProxyURLs(limit int, targetProfile string) ([]string, error) {
-	items, err := s.ExportAvailable(targetProfile, limit)
+	items, err := s.ExportAvailable(targetProfile, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -777,6 +956,9 @@ func (s *store) AvailableProxyURLs(limit int, targetProfile string) ([]string, e
 			seen[proxyURL] = true
 			out = append(out, proxyURL)
 		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

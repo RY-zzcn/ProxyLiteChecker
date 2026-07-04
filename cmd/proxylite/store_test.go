@@ -86,6 +86,128 @@ func TestTargetSpecificCheckResults(t *testing.T) {
 	}
 }
 
+func TestStatsIncludesTargetAvailability(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080\nhttp://5.6.7.8:8080", "test", "auto"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	if err := st.SaveCheckResult(CheckResult{
+		ProxyID:        items[0].ID,
+		Status:         "available",
+		Grade:          "A",
+		SuccessRate:    1,
+		TargetProfile:  "openai",
+		RecommendedUse: "openai",
+	}); err != nil {
+		t.Fatalf("save openai result: %v", err)
+	}
+	stats, err := st.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats["available"] != 1 || stats["available_records"] != 1 {
+		t.Fatalf("expected one global available proxy, got %#v", stats)
+	}
+	openAI := targetStatsForTest(t, stats, "openai")
+	if openAI["available"] != 1 || openAI["untested"] != 1 || openAI["total"] != 2 {
+		t.Fatalf("unexpected openai stats: %#v", openAI)
+	}
+	generic := targetStatsForTest(t, stats, "generic")
+	if generic["available"] != 0 || generic["untested"] != 2 || generic["total"] != 2 {
+		t.Fatalf("unexpected generic stats: %#v", generic)
+	}
+}
+
+func TestCountAvailableProxyURLsDeduplicatesDetectedProtocol(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.1.1.1:8080\nsocks5://1.1.1.1:8080\nhttp://2.2.2.2:8080", "test", "auto"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	for _, item := range items {
+		if err := st.SaveCheckResult(CheckResult{
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			SuccessRate:      1,
+			TargetProfile:    "openai",
+			DetectedProtocol: stringPtr("http"),
+			RecommendedUse:   "openai",
+		}); err != nil {
+			t.Fatalf("save check result: %v", err)
+		}
+	}
+	count, err := st.CountAvailableProxyURLs("openai")
+	if err != nil {
+		t.Fatalf("count available proxy urls: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected two unique available proxy urls, got %d", count)
+	}
+	unionCount, err := st.CountAvailableProxyURLsForProfiles([]string{"openai", "grok"})
+	if err != nil {
+		t.Fatalf("count available proxy urls for profiles: %v", err)
+	}
+	if unionCount != 2 {
+		t.Fatalf("expected two unique available proxy urls across profiles, got %d", unionCount)
+	}
+	stats, err := st.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats["available"] != 2 || stats["available_records"] != 3 {
+		t.Fatalf("expected unique available count and record count, got %#v", stats)
+	}
+	urls, err := st.AvailableProxyURLs(0, "openai")
+	if err != nil {
+		t.Fatalf("available proxy urls: %v", err)
+	}
+	if len(urls) != count {
+		t.Fatalf("count and exported urls differ: count=%d urls=%#v", count, urls)
+	}
+	limited, err := st.AvailableProxyURLs(1, "openai")
+	if err != nil {
+		t.Fatalf("limited available proxy urls: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Fatalf("expected limit after dedupe, got %#v", limited)
+	}
+}
+
+func targetStatsForTest(t *testing.T, stats map[string]any, profile string) map[string]any {
+	t.Helper()
+	targets, ok := stats["by_target"].([]map[string]any)
+	if !ok {
+		t.Fatalf("missing by_target stats: %#v", stats["by_target"])
+	}
+	for _, item := range targets {
+		if item["target_profile"] == profile {
+			return item
+		}
+	}
+	t.Fatalf("missing stats for target %q: %#v", profile, targets)
+	return nil
+}
+
 func TestImportProxiesDeduplicatesByProxyKey(t *testing.T) {
 	st, err := openStore(":memory:")
 	if err != nil {

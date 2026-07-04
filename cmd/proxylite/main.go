@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	appVersion           = "0.2.1"
+	appVersion           = "0.2.2"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -475,19 +475,10 @@ func (s *server) gatewayPayload() map[string]any {
 }
 
 func (s *server) handleExportTXT(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ExportAvailable(exportTargetProfileQuery(r), clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000))
+	lines, err := s.store.AvailableProxyURLs(clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000), exportTargetProfileQuery(r))
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	lines := make([]string, 0, len(items))
-	seen := map[string]bool{}
-	for _, item := range items {
-		proxyURL := item.ProxyURL()
-		if !seen[proxyURL] {
-			seen[proxyURL] = true
-			lines = append(lines, proxyURL)
-		}
 	}
 	writeText(w, "text/plain; charset=utf-8", strings.Join(lines, "\n"))
 }

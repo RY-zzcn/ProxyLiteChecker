@@ -60,6 +60,98 @@ func TestGatewaySelectUpstreamRoundRobinByTarget(t *testing.T) {
 	}
 }
 
+func TestGatewayStatusReportsLoadedAndAvailableUpstreams(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.1.1.1:8080\nhttp://2.2.2.2:8080\nhttp://3.3.3.3:8080", "test", "auto"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	for _, item := range items {
+		if err := st.SaveCheckResult(CheckResult{
+			ProxyID:        item.ID,
+			Status:         "available",
+			Grade:          "A",
+			SuccessRate:    1,
+			TargetProfile:  "openai",
+			RecommendedUse: "openai",
+		}); err != nil {
+			t.Fatalf("save check result: %v", err)
+		}
+	}
+	gateway := newGatewayServer(st, gatewayConfig{
+		Host:           "127.0.0.1",
+		Port:           0,
+		TargetProfiles: []string{"openai"},
+		UpstreamLimit:  2,
+	})
+	status := gateway.endpointStatus(gateway.endpoints[0])
+	if status["upstreams"] != 2 || status["loaded_upstreams"] != 2 {
+		t.Fatalf("expected two loaded upstreams, got %#v", status)
+	}
+	if status["available_upstreams"] != 3 {
+		t.Fatalf("expected three available upstreams, got %#v", status)
+	}
+	if status["upstream_limited"] != true {
+		t.Fatalf("expected upstream_limited, got %#v", status)
+	}
+}
+
+func TestGatewayStatusReportsUniqueAvailableAcrossTargets(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.1.1.1:8080\nhttp://2.2.2.2:8080", "test", "auto"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	for _, item := range items {
+		for _, profile := range []string{"openai", "grok"} {
+			if err := st.SaveCheckResult(CheckResult{
+				ProxyID:        item.ID,
+				Status:         "available",
+				Grade:          "A",
+				SuccessRate:    1,
+				TargetProfile:  profile,
+				RecommendedUse: profile,
+			}); err != nil {
+				t.Fatalf("save %s result: %v", profile, err)
+			}
+		}
+	}
+	gateway := newGatewayServer(st, gatewayConfig{
+		Host:           "127.0.0.1",
+		Port:           0,
+		TargetProfiles: []string{"openai", "grok"},
+		UpstreamLimit:  1,
+	})
+	status := gateway.Status()
+	if status["loaded_upstreams"] != 2 {
+		t.Fatalf("expected two loaded target slots, got %#v", status)
+	}
+	if status["target_available_upstreams"] != 4 {
+		t.Fatalf("expected four target-available upstreams, got %#v", status)
+	}
+	if status["unique_available_upstreams"] != 2 || status["available_upstreams"] != 2 {
+		t.Fatalf("expected two unique available upstreams, got %#v", status)
+	}
+}
+
 func TestGatewayRecentSnapshotNewestFirstLimit(t *testing.T) {
 	endpoint := &gatewayEndpoint{}
 	for _, upstream := range []string{
