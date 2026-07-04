@@ -490,19 +490,58 @@ function gatewayRecentRows(item) {
 }
 
 function displayGatewayBind(gateway, type) {
+  const scheme = type === "socks5" ? "socks5" : "http";
   const hostKey = type === "socks5" ? "socks5_host" : "http_host";
   const portKey = type === "socks5" ? "socks5_port" : "http_port";
   const bindKey = type === "socks5" ? "socks5_bind" : "http_bind";
   const fallback = gateway[bindKey] || gateway.bind || `${gateway[hostKey] || gateway.host}:${gateway[portKey] || gateway.port}`;
-  const host = gateway[hostKey] || gateway.host;
-  const port = gateway[portKey] || String(fallback).split(":").pop();
-  if (host === "0.0.0.0" || String(fallback).startsWith("0.0.0.0:")) {
-    return `${location.hostname || "服务器IP"}:${port}`;
+  if (hasGatewayScheme(fallback)) {
+    return fallback;
   }
-  if (host === "::" || String(fallback).startsWith("[::]:")) {
-    return `${location.hostname || "服务器IP"}:${port}`;
+  const bindText = String(fallback || "").trim();
+  const host = gateway[hostKey] || gateway.host || gatewayHostFromBind(bindText);
+  const port = gateway[portKey] || gatewayPortFromBind(bindText);
+  if (host === "0.0.0.0" || host === "::" || bindText.startsWith("0.0.0.0:") || bindText.startsWith("[::]:")) {
+    return gatewayURL(scheme, location.hostname || "服务器IP", port);
   }
-  return fallback;
+  if (host && port) {
+    return gatewayURL(scheme, host, port);
+  }
+  return gatewayURL(scheme, bindText, "");
+}
+
+function hasGatewayScheme(value) {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(String(value || "").trim());
+}
+
+function gatewayURL(scheme, host, port) {
+  const cleanHost = gatewayURLHost(host);
+  if (!cleanHost) return `${scheme}://`;
+  return `${scheme}://${cleanHost}${port ? `:${port}` : ""}`;
+}
+
+function gatewayURLHost(host) {
+  const text = String(host || "").trim();
+  if (!text) return "";
+  if (text.startsWith("[") && text.endsWith("]")) return text;
+  if (text.includes(":")) return `[${text}]`;
+  return text;
+}
+
+function gatewayPortFromBind(value) {
+  const match = String(value || "").trim().match(/:(\d+)$/);
+  return match ? match[1] : "";
+}
+
+function gatewayHostFromBind(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.startsWith("[")) {
+    const end = text.indexOf("]");
+    return end > 0 ? text.slice(1, end) : "";
+  }
+  const port = gatewayPortFromBind(text);
+  return port ? text.slice(0, -port.length - 1) : text;
 }
 
 function renderJobs(jobs) {

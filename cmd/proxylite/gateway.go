@@ -39,19 +39,24 @@ type gatewayServer struct {
 	startedAt string
 }
 
-const gatewayRecentLimit = 5
+const (
+	gatewayRecentLimit             = 5
+	gatewayUpstreamRefreshInterval = 30 * time.Second
+)
 
 type gatewayEndpoint struct {
-	TargetProfile   string
-	HTTPHost        string
-	HTTPPort        int
-	Socks5Host      string
-	Socks5Port      int
-	http            *http.Server
-	socks5Listener  net.Listener
-	mu              sync.Mutex
-	index           int
-	recentUpstreams []string
+	TargetProfile     string
+	HTTPHost          string
+	HTTPPort          int
+	Socks5Host        string
+	Socks5Port        int
+	http              *http.Server
+	socks5Listener    net.Listener
+	mu                sync.Mutex
+	index             int
+	upstreams         []string
+	upstreamsLoadedAt time.Time
+	recentUpstreams   []string
 
 	totalRequests   int64
 	successRequests int64
@@ -90,6 +95,9 @@ func (g *gatewayServer) Start() error {
 		return nil
 	}
 	for _, endpoint := range g.endpoints {
+		if err := g.refreshEndpointUpstreams(endpoint, true); err != nil {
+			log.Printf("gateway target=%s initial upstream load failed: %v", endpoint.TargetProfile, err)
+		}
 		if endpoint.HTTPPort > 0 {
 			if err := g.startHTTPGateway(endpoint); err != nil {
 				log.Printf("HTTP gateway target=%s disabled: %v", endpoint.TargetProfile, err)
@@ -217,10 +225,7 @@ func (g *gatewayServer) endpointStatus(endpoint *gatewayEndpoint) map[string]any
 	upstreamCount := 0
 	availableUpstreamCount := 0
 	if g.store != nil {
-		items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, endpoint.TargetProfile)
-		if err == nil {
-			upstreamCount = len(items)
-		}
+		upstreamCount = g.endpointLoadedUpstreamCount(endpoint)
 		total, err := g.store.CountAvailableProxyURLs(endpoint.TargetProfile)
 		if err == nil {
 			availableUpstreamCount = total
@@ -338,22 +343,57 @@ func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request, en
 }
 
 func (g *gatewayServer) selectUpstream(endpoint *gatewayEndpoint) (string, error) {
+	endpoint.mu.Lock()
+	defer endpoint.mu.Unlock()
+	if err := g.refreshEndpointUpstreamsLocked(endpoint, false); err != nil && len(endpoint.upstreams) == 0 {
+		return "", err
+	}
+	if len(endpoint.upstreams) == 0 {
+		return "", fmt.Errorf("no available %s proxies; run a check first", targetProfileLabel(endpoint.TargetProfile))
+	}
+	item := endpoint.upstreams[endpoint.index%len(endpoint.upstreams)]
+	endpoint.index = (endpoint.index + 1) % len(endpoint.upstreams)
+	endpoint.rememberUpstreamLocked(item)
+	return item, nil
+}
+
+func (g *gatewayServer) refreshEndpointUpstreams(endpoint *gatewayEndpoint, force bool) error {
+	endpoint.mu.Lock()
+	defer endpoint.mu.Unlock()
+	return g.refreshEndpointUpstreamsLocked(endpoint, force)
+}
+
+func (g *gatewayServer) refreshEndpointUpstreamsLocked(endpoint *gatewayEndpoint, force bool) error {
+	if !force && len(endpoint.upstreams) > 0 && time.Since(endpoint.upstreamsLoadedAt) < gatewayUpstreamRefreshInterval {
+		return nil
+	}
 	if g.store == nil {
-		return "", fmt.Errorf("store unavailable")
+		return fmt.Errorf("store unavailable")
 	}
 	items, err := g.store.AvailableProxyURLs(g.cfg.UpstreamLimit, endpoint.TargetProfile)
 	if err != nil {
-		return "", err
+		if len(endpoint.upstreams) > 0 {
+			return nil
+		}
+		return err
 	}
-	if len(items) == 0 {
-		return "", fmt.Errorf("no available %s proxies; run a check first", targetProfileLabel(endpoint.TargetProfile))
+	endpoint.upstreams = append([]string(nil), items...)
+	endpoint.upstreamsLoadedAt = time.Now()
+	if len(endpoint.upstreams) == 0 {
+		endpoint.index = 0
+	} else {
+		endpoint.index %= len(endpoint.upstreams)
 	}
+	return nil
+}
+
+func (g *gatewayServer) endpointLoadedUpstreamCount(endpoint *gatewayEndpoint) int {
 	endpoint.mu.Lock()
 	defer endpoint.mu.Unlock()
-	item := items[endpoint.index%len(items)]
-	endpoint.index++
-	endpoint.rememberUpstreamLocked(item)
-	return item, nil
+	if err := g.refreshEndpointUpstreamsLocked(endpoint, false); err != nil && len(endpoint.upstreams) == 0 {
+		return 0
+	}
+	return len(endpoint.upstreams)
 }
 
 func (e *gatewayEndpoint) recordSuccess(upstream string) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4 - 2026-07-04
+
+- Show gateway addresses as complete `http://` and `socks5://` URLs and rename the section to "代理网关".
+- Keep each gateway target on a stable in-memory upstream pool between refreshes so round-robin requests are not reshuffled by every database read.
+- Report loaded gateway upstreams from the current runtime pool while keeping available upstream counts as the database-wide unique inventory.
+
 ## 0.2.3 - 2026-07-04
 
 - Show the active per-target gateway upstream limit in the local gateway summary.
