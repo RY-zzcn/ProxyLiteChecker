@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-07-07
+
+- Add GeoIP-backed country detection for imported and checked proxies.
+- Add country filters and strict/fallback policies for local gateway upstream selection.
+- Add Web UI controls and export parameters for country-limited proxy output.
+- Add GeoIP database download, refresh, and configuration settings.
+- Add regression coverage for country metadata storage and gateway filtering.
+
 ## 0.3.0 - 2026-07-04
 
 - Add gateway selector state with active and isolated upstream counts in the status API and web console.
