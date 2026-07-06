@@ -73,6 +73,8 @@ func normalizeGatewayConfig(cfg gatewayConfig) gatewayConfig {
 	}
 	cfg.FailureCooldownS = clampInt(cfg.FailureCooldownS, 1, 86400)
 	cfg.UpstreamStrategy = normalizeGatewayUpstreamStrategy(cfg.UpstreamStrategy)
+	cfg.Countries = normalizeCountryCodes(cfg.Countries)
+	cfg.CountryPolicy = normalizeGatewayCountryPolicy(cfg.CountryPolicy)
 	return cfg
 }
 
@@ -128,7 +130,12 @@ func (s *gatewaySelector) refreshLocked(g *gatewayServer, force bool) error {
 		s.lastRefreshError = err.Error()
 		return err
 	}
-	items, err := g.store.AvailableProxyURLs(cfg.UpstreamLimit, s.targetProfile)
+	items, err := g.store.AvailableProxyURLsFiltered(availableProxyFilter{
+		TargetProfile: s.targetProfile,
+		Limit:         cfg.UpstreamLimit,
+		Countries:     cfg.Countries,
+		CountryPolicy: cfg.CountryPolicy,
+	})
 	if err != nil {
 		s.lastRefreshError = err.Error()
 		if len(s.upstreams) > 0 {

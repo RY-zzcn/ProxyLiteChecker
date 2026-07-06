@@ -45,8 +45,12 @@ type CheckResult struct {
 	LatencyMS        *int    `json:"latency_ms,omitempty"`
 	ExitIP           *string `json:"exit_ip,omitempty"`
 	Country          *string `json:"country,omitempty"`
+	CountryName      *string `json:"country_name,omitempty"`
+	ContinentCode    *string `json:"continent_code,omitempty"`
 	IPType           *string `json:"ip_type,omitempty"`
 	ASNOrg           *string `json:"asn_org,omitempty"`
+	GeoSource        *string `json:"geo_source,omitempty"`
+	GeoUpdatedAt     *string `json:"geo_updated_at,omitempty"`
 	SuccessRate      float64 `json:"success_rate"`
 	TargetProfile    string  `json:"target_profile"`
 	DetectedProtocol *string `json:"detected_protocol,omitempty"`
@@ -433,12 +437,18 @@ func checkWithClient(ctx context.Context, proxyID int, targetProfile string, pro
 			}
 		}
 	}
-	var country, ipType, asnOrg *string
+	var country, countryName, continentCode, ipType, asnOrg, geoSource, geoUpdatedAt *string
 	if exitIP != nil {
 		metadata := checkmeta.EnrichIP(ctx, nil, "", *exitIP)
 		country = stringPtr(metadata.Country)
+		countryName = stringPtr(metadata.CountryName)
+		continentCode = stringPtr(metadata.ContinentCode)
 		ipType = stringPtr(metadata.IPType)
 		asnOrg = stringPtr(metadata.ASNOrg)
+		geoSource = stringPtr(metadata.GeoSource)
+		if !metadata.GeoUpdatedAt.IsZero() {
+			geoUpdatedAt = stringPtr(formatBeijingTime(metadata.GeoUpdatedAt))
+		}
 	}
 	successRate := float64(successes) / float64(total)
 	status := "failed"
@@ -460,8 +470,12 @@ func checkWithClient(ctx context.Context, proxyID int, targetProfile string, pro
 		LatencyMS:        latency,
 		ExitIP:           exitIP,
 		Country:          country,
+		CountryName:      countryName,
+		ContinentCode:    continentCode,
 		IPType:           ipType,
 		ASNOrg:           asnOrg,
+		GeoSource:        geoSource,
+		GeoUpdatedAt:     geoUpdatedAt,
 		SuccessRate:      successRate,
 		TargetProfile:    targetProfile,
 		DetectedProtocol: &detected,

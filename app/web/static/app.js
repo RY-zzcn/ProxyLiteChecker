@@ -4,6 +4,7 @@ const state = {
   settings: null,
   scheduler: null,
   stats: null,
+  geoip: null,
   activeJob: null,
   pollTimer: null,
   gatewayTimer: null,
@@ -165,6 +166,25 @@ function targetLabel(value) {
   return TARGET_LABELS[value] || value || "常规";
 }
 
+function normalizeCountryCodesInput(value) {
+  const list = Array.isArray(value) ? value : String(value || "").replaceAll("，", ",").split(",");
+  const out = [];
+  for (const item of list) {
+    const code = String(item || "").trim().toUpperCase();
+    if (code && code !== "ALL" && /^[A-Z]{2}$/.test(code) && !out.includes(code)) {
+      out.push(code);
+    }
+  }
+  return out.sort();
+}
+
+function countrySummary(countries, policy) {
+  const list = normalizeCountryCodesInput(countries);
+  if (!list.length) return "全部地区";
+  const suffix = String(policy || "strict") === "fallback_any" ? " · 可回退" : "";
+  return `${list.join(",")}${suffix}`;
+}
+
 function defaultSettings() {
   return {
     proxy_page_size: 50,
@@ -192,6 +212,8 @@ function defaultSettings() {
     auto_check_interval_minutes: 120,
     gateway_upstream_limit: 200,
     gateway_upstream_strategy: "round_robin",
+    gateway_countries: [],
+    gateway_country_policy: "strict",
     gateway_retry_attempts: 2,
     gateway_failure_threshold: 3,
     gateway_failure_cooldown_seconds: 300,
@@ -204,6 +226,13 @@ function proxyUrl(item) {
   const protocol = item.detected_protocol || item.protocol || "http";
   const auth = item.username ? `${item.username}:***@` : "";
   return `${protocol}://${auth}${item.ip}:${item.port}`;
+}
+
+function proxyGeoLabel(item) {
+  const code = String(item?.country || "").trim().toUpperCase();
+  const name = String(item?.country_name || "").trim();
+  if (code && name) return `${code} ${name}`;
+  return code || name || "";
 }
 
 function toast(message, type = "info") {
@@ -273,6 +302,7 @@ async function bootstrap() {
   renderSources();
   renderGateway(payload.gateway || {});
   renderJobs(payload.active_jobs || []);
+  loadGeoIP().catch(() => {});
   await loadProxies();
   startGatewayPolling();
 }
@@ -359,6 +389,8 @@ function renderSettings(settings, scheduler) {
   el("settingsCheckHardTimeout").value = state.settings.check_hard_timeout;
   el("gatewayUpstreamLimit").value = state.settings.gateway_upstream_limit;
   el("gatewayUpstreamStrategy").value = state.settings.gateway_upstream_strategy;
+  el("gatewayCountries").value = normalizeCountryCodesInput(state.settings.gateway_countries).join(",");
+  el("gatewayCountryPolicy").value = state.settings.gateway_country_policy || "strict";
   el("gatewayRetryAttempts").value = state.settings.gateway_retry_attempts;
   el("gatewayFailureThreshold").value = state.settings.gateway_failure_threshold;
   el("gatewayFailureCooldown").value = state.settings.gateway_failure_cooldown_seconds;
@@ -409,11 +441,12 @@ function renderGateway(gateway) {
   );
   const upstreamLimit = gatewayUpstreamLimit(gateway, profiles);
   const limitText = upstreamLimit > 0 ? `单目标上限 ${upstreamLimit}` : "单目标上限未设置";
+  const countryText = countrySummary(gateway.countries || state.settings?.gateway_countries || [], gateway.country_policy || state.settings?.gateway_country_policy);
   const isolationText = skippedSlots > 0 ? ` · 活跃 ${activeSlots} / 隔离 ${skippedSlots}` : "";
   const totalRequests = Number(gateway.valid_requests ?? gateway.total_requests ?? profiles.reduce((total, item) => total + Number(item.valid_requests ?? item.total_requests ?? 0), 0));
   const totalConnections = Number(gateway.total_connections ?? profiles.reduce((total, item) => total + Number(item.total_connections || 0), 0));
   el("gatewaySummary").textContent = gateway.enabled
-    ? `${enabledProfiles.length} 个目标入口 · ${limitText} · 已装载 ${loadedSlots} 个目标槽位${isolationText} · 唯一可用 ${uniqueAvailable} 个上游 · 有效请求 ${totalRequests} / 连接 ${totalConnections}`
+    ? `${enabledProfiles.length} 个目标入口 · ${limitText} · ${countryText} · 已装载 ${loadedSlots} 个目标槽位${isolationText} · 唯一可用 ${uniqueAvailable} 个上游 · 有效请求 ${totalRequests} / 连接 ${totalConnections}`
     : "网关未启用";
   el("gatewayCards").innerHTML =
     profiles
@@ -423,7 +456,7 @@ function renderGateway(gateway) {
   const pill = el("gatewayPill");
   pill.textContent = gateway.enabled ? `网关 ${enabledProfiles.length} 目标 · ${loadedSlots} 槽位 · ${uniqueAvailable} 上游` : "网关未启用";
   pill.title = gateway.enabled
-    ? `${limitText}；策略 ${gatewayStrategyLabel(gateway.upstream_strategy)}；重试 ${Number(gateway.retry_attempts || 1)} 次；保存设置后热生效`
+    ? `${limitText}；地区 ${countryText}；策略 ${gatewayStrategyLabel(gateway.upstream_strategy)}；重试 ${Number(gateway.retry_attempts || 1)} 次；保存设置后热生效`
     : "";
   pill.classList.toggle("offline", !gateway.enabled);
 }
@@ -515,6 +548,7 @@ function gatewayCardHTML(item, gatewayEnabled) {
   const availableUpstreams = gatewayAvailableUpstreams(item);
   const activeUpstreams = gatewayActiveUpstreams(item);
   const skippedUpstreams = gatewaySkippedUpstreams(item);
+  const regionText = countrySummary(item.countries || state.settings?.gateway_countries || [], item.country_policy || state.settings?.gateway_country_policy);
   const validRequests = Number(item.valid_requests ?? item.total_requests ?? 0);
   const totalConnections = Number(item.total_connections ?? validRequests);
   const rejectedRequests = Number(item.rejected_requests || 0);
@@ -559,6 +593,7 @@ function gatewayCardHTML(item, gatewayEnabled) {
         <span>成功率 ${Math.round(Number(item.success_rate || 0) * 100)}%</span>
         <span>活跃 ${activeUpstreams}</span>
         <span>隔离 ${skippedUpstreams}</span>
+        <span>${escapeHtml(regionText)}</span>
         <span>${escapeHtml(gatewayStrategyLabel(item.upstream_strategy))}</span>
       </div>
       <div class="recent-list">${recent}</div>
@@ -672,6 +707,22 @@ async function loadGateway() {
   renderGateway(gateway);
 }
 
+async function loadGeoIP() {
+  const status = await api("/api/geoip/status");
+  renderGeoIP(status);
+}
+
+function renderGeoIP(status) {
+  state.geoip = status || {};
+  const loaded = Boolean(state.geoip.country_loaded);
+  const updated = state.geoip.last_update_at || state.geoip.last_load_at || "";
+  const updatedText = updated ? ` · ${displayTimestamp(updated)}` : "";
+  const source = state.geoip.country_source_hint || (loaded ? "mmdb" : "endpoint");
+  const errorText = state.geoip.last_load_error ? ` · ${state.geoip.last_load_error}` : "";
+  el("geoipStatusText").textContent = loaded ? `GeoIP 已加载 · ${source}${updatedText}${errorText}` : `GeoIP 未加载 · ${source}${errorText}`;
+  el("geoipStatusText").title = state.geoip.country_path || state.geoip.last_load_error || "";
+}
+
 async function loadActiveJobs() {
   const payload = await api("/api/jobs/active");
   renderJobs(payload.items || []);
@@ -687,6 +738,7 @@ async function loadProxies() {
     status: el("proxyStatus").value,
     target_profile: el("targetProfile").value,
     q: el("proxySearch").value.trim(),
+    countries: normalizeCountryCodesInput(el("proxyCountry").value).join(","),
     limit: String(state.proxies.limit),
     offset: String(state.proxies.offset),
   });
@@ -705,7 +757,7 @@ async function loadProxies() {
             <td>${statusTag(item.status)}${item.failure_reason ? `<span class="reason-tag">${escapeHtml(item.failure_reason)}</span>` : ""}</td>
             <td>${escapeHtml(item.grade || "-")}</td>
             <td>${item.latency_ms == null ? "-" : `${item.latency_ms} ms`}</td>
-            <td>${escapeHtml(item.exit_ip || "-")} ${item.country ? `<span class="muted">${escapeHtml(item.country)}</span>` : ""}</td>
+            <td>${escapeHtml(item.exit_ip || "-")} ${proxyGeoLabel(item) ? `<span class="muted">${escapeHtml(proxyGeoLabel(item))}</span>` : ""}</td>
             <td>${escapeHtml(item.recommended_use || "-")}</td>
             <td>${escapeHtml(item.source || "-")}</td>
             <td>${escapeHtml(displayTimestamp(item.last_checked_at || item.updated_at))}</td>
@@ -870,6 +922,8 @@ async function saveSettings(event) {
         auto_check_interval_minutes: Number(el("autoCheckInterval").value || 120),
         gateway_upstream_limit: Number(el("gatewayUpstreamLimit").value || 200),
         gateway_upstream_strategy: el("gatewayUpstreamStrategy").value,
+        gateway_countries: normalizeCountryCodesInput(el("gatewayCountries").value),
+        gateway_country_policy: el("gatewayCountryPolicy").value,
         gateway_retry_attempts: Number(el("gatewayRetryAttempts").value || 2),
         gateway_failure_threshold: Number(el("gatewayFailureThreshold").value || 3),
         gateway_failure_cooldown_seconds: Number(el("gatewayFailureCooldown").value || 300),
@@ -903,6 +957,14 @@ async function saveExportTarget() {
   } catch (error) {
     toast(error.message, "error");
   }
+}
+
+async function updateGeoIP(event) {
+  await withButton(event.currentTarget, "更新中", async () => {
+    const status = await api("/api/geoip/update", { method: "POST" });
+    renderGeoIP(status);
+    toast("GeoIP 已更新", "success");
+  });
 }
 
 async function copyGatewayAddress(event) {
@@ -944,6 +1006,7 @@ async function deleteFailed(event) {
 async function refreshAll() {
   await loadStats();
   await loadGateway();
+  await loadGeoIP();
   await loadActiveJobs();
   await loadSettings();
   await loadProxies();
@@ -952,6 +1015,10 @@ async function refreshAll() {
 function updateExportLinks() {
   const target = normalizeTargetValues(el("exportTarget")?.value || "generic", true)[0];
   const params = new URLSearchParams({ target_profile: target });
+  const countries = normalizeCountryCodesInput(el("proxyCountry")?.value || "");
+  if (countries.length) {
+    params.set("countries", countries.join(","));
+  }
   el("exportTxtLink").href = `/api/export/proxies.txt?${params}`;
   el("exportJsonLink").href = `/api/export/proxies.json?${params}`;
 }
@@ -991,6 +1058,7 @@ function bindEvents() {
   el("deleteFailedBtn").addEventListener("click", deleteFailed);
   el("cancelJobBtn").addEventListener("click", cancelJob);
   el("saveSettingsBtn").addEventListener("click", saveSettings);
+  el("geoipUpdateBtn").addEventListener("click", updateGeoIP);
   el("settingsFetchLimit").addEventListener("input", () => {
     el("sourceLimit").value = el("settingsFetchLimit").value;
   });
@@ -1027,6 +1095,13 @@ function bindEvents() {
   });
   el("proxyStatus").addEventListener("change", resetProxyPage);
   el("targetProfile").addEventListener("change", resetProxyPage);
+  el("proxyCountry").addEventListener(
+    "input",
+    debounce(() => {
+      updateExportLinks();
+      resetProxyPage();
+    }, 250),
+  );
   el("proxySearch").addEventListener("input", debounce(resetProxyPage, 250));
 }
 

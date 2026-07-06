@@ -720,6 +720,31 @@ textarea {
   font-size: 12px;
 }
 
+.geoip-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.geoip-status-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.geoip-status-row button {
+  flex: 0 0 auto;
+}
+
 .quick-param-grid .target-group label,
 .mini-grid .target-group label {
   display: inline-flex;

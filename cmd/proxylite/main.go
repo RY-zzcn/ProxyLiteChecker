@@ -17,6 +17,7 @@ import (
 	"time"
 
 	webassets "github.com/RY-zzcn/ProxyLiteChecker/app/web"
+	"github.com/RY-zzcn/ProxyLiteChecker/internal/checkmeta"
 )
 
 const (
@@ -50,6 +51,8 @@ type config struct {
 	GatewayFailureCooldownS   int
 	GatewayUpstreamStrategy   string
 	GatewayRequestTimeoutS    int
+	GatewayCountries          []string
+	GatewayCountryPolicy      string
 	GatewayTargetProfiles     []string
 	GatewayHTTPProfilePorts   map[string]int
 	GatewaySocks5ProfilePorts map[string]int
@@ -72,6 +75,7 @@ type loginRequest struct {
 
 func main() {
 	cfg := loadConfig()
+	startGeoIPServices()
 	srv := newServer(cfg)
 	if srv.cfg.GatewayEnabled {
 		srv.gateway = newGatewayServer(srv.store, gatewayConfig{
@@ -86,6 +90,8 @@ func main() {
 			FailureThreshold:   srv.cfg.GatewayFailureThreshold,
 			FailureCooldownS:   srv.cfg.GatewayFailureCooldownS,
 			UpstreamStrategy:   srv.cfg.GatewayUpstreamStrategy,
+			Countries:          srv.cfg.GatewayCountries,
+			CountryPolicy:      srv.cfg.GatewayCountryPolicy,
 			TargetProfiles:     srv.cfg.GatewayTargetProfiles,
 			HTTPProfilePorts:   srv.cfg.GatewayHTTPProfilePorts,
 			Socks5ProfilePorts: srv.cfg.GatewaySocks5ProfilePorts,
@@ -139,6 +145,8 @@ func loadConfig() config {
 		GatewayFailureCooldownS:   clampInt(envInt("PLC_GATEWAY_FAILURE_COOLDOWN_SECONDS", gatewayDefaultFailureCooldownS), 1, 86400),
 		GatewayUpstreamStrategy:   normalizeGatewayUpstreamStrategy(envString("PLC_GATEWAY_UPSTREAM_STRATEGY", gatewayStrategyRoundRobin)),
 		GatewayRequestTimeoutS:    clampInt(envInt("PLC_GATEWAY_REQUEST_TIMEOUT_SECONDS", 20), 2, 120),
+		GatewayCountries:          normalizeCountryCodes(anyToStringSlice(envString("PLC_GATEWAY_COUNTRIES", ""))),
+		GatewayCountryPolicy:      normalizeGatewayCountryPolicy(envString("PLC_GATEWAY_COUNTRY_POLICY", gatewayCountryPolicyStrict)),
 		GatewayTargetProfiles:     gatewayTargetProfilesFromEnv(),
 		GatewayHTTPProfilePorts:   gatewayProfilePortMapFromEnv("PLC_GATEWAY_HTTP_PROFILE_PORTS"),
 		GatewaySocks5ProfilePorts: gatewayProfilePortMapFromEnv("PLC_GATEWAY_SOCKS5_PROFILE_PORTS"),
@@ -173,6 +181,15 @@ func gatewayProfilePortMapFromEnv(key string) map[string]int {
 		ports[profile] = port
 	}
 	return ports
+}
+
+func startGeoIPServices() {
+	go func() {
+		if err := checkmeta.InitializeGeoIPDatabasesFromEnv(); err != nil {
+			log.Printf("GeoIP initial load failed: %v", err)
+		}
+		checkmeta.StartGeoIPAutoUpdateFromEnv()
+	}()
 }
 
 func applySecurityBaseline(cfg config) config {
@@ -234,6 +251,8 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /api/proxies", s.withAuth(s.handleProxies))
 	s.mux.HandleFunc("POST /api/proxies/import", s.withAuth(s.handleImportProxies))
 	s.mux.HandleFunc("DELETE /api/proxies/by-status", s.withAuth(s.handleDeleteProxiesByStatus))
+	s.mux.HandleFunc("GET /api/geoip/status", s.withAuth(s.handleGeoIPStatus))
+	s.mux.HandleFunc("POST /api/geoip/update", s.withAuth(s.handleGeoIPUpdate))
 	s.mux.HandleFunc("POST /api/checks/run-job", s.withAuth(s.handleRunCheckJob))
 	s.mux.HandleFunc("GET /api/jobs/active", s.withAuth(s.handleActiveJobs))
 	s.mux.HandleFunc("GET /api/jobs/{job_id}", s.withAuth(s.handleJobStatus))
@@ -453,6 +472,7 @@ func (s *server) handleProxies(w http.ResponseWriter, r *http.Request) {
 		Status:        r.URL.Query().Get("status"),
 		TargetProfile: r.URL.Query().Get("target_profile"),
 		Query:         r.URL.Query().Get("q"),
+		Countries:     countriesFromQuery(r),
 		Limit:         limit,
 		Offset:        offset,
 	}
@@ -489,6 +509,18 @@ func (s *server) handleDeleteProxiesByStatus(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	jsonResponse(w, http.StatusOK, result)
+}
+
+func (s *server) handleGeoIPStatus(w http.ResponseWriter, _ *http.Request) {
+	jsonResponse(w, http.StatusOK, checkmeta.GeoIPReaderStatus())
+}
+
+func (s *server) handleGeoIPUpdate(w http.ResponseWriter, _ *http.Request) {
+	if err := checkmeta.UpdateGeoIPDatabaseFromEnv(); err != nil {
+		errorResponse(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, checkmeta.GeoIPReaderStatus())
 }
 
 func (s *server) handleRunCheckJob(w http.ResponseWriter, r *http.Request) {
@@ -571,6 +603,8 @@ func (s *server) applyGatewaySettings(settings appSettings) {
 	cfg.FailureThreshold = settings.GatewayFailureThreshold
 	cfg.FailureCooldownS = settings.GatewayFailureCooldownS
 	cfg.RequestTimeoutS = settings.GatewayRequestTimeoutS
+	cfg.Countries = settings.GatewayCountries
+	cfg.CountryPolicy = settings.GatewayCountryPolicy
 	s.gateway.ApplyRuntimeConfig(cfg)
 }
 
@@ -578,12 +612,16 @@ func gatewayConfigPayload(settings appSettings, status map[string]any) map[strin
 	return map[string]any{
 		"upstream_limit":                     settings.GatewayUpstreamLimit,
 		"upstream_strategy":                  settings.GatewayUpstreamStrategy,
+		"countries":                          settings.GatewayCountries,
+		"country_policy":                     settings.GatewayCountryPolicy,
 		"retry_attempts":                     settings.GatewayRetryAttempts,
 		"failure_threshold":                  settings.GatewayFailureThreshold,
 		"failure_cooldown_seconds":           settings.GatewayFailureCooldownS,
 		"request_timeout_seconds":            settings.GatewayRequestTimeoutS,
 		"effective_upstream_limit":           status["upstream_limit"],
 		"effective_upstream_strategy":        status["upstream_strategy"],
+		"effective_countries":                status["countries"],
+		"effective_country_policy":           status["country_policy"],
 		"effective_retry_attempts":           status["retry_attempts"],
 		"effective_failure_threshold":        status["failure_threshold"],
 		"effective_failure_cooldown_seconds": status["failure_cooldown_seconds"],
@@ -606,7 +644,9 @@ func (s *server) gatewayPayload() map[string]any {
 }
 
 func (s *server) handleExportTXT(w http.ResponseWriter, r *http.Request) {
-	lines, err := s.store.AvailableProxyURLs(clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000), exportTargetProfileQuery(r))
+	filter := exportAvailableFilterFromRequest(r)
+	filter.Limit = clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000)
+	lines, err := s.store.AvailableProxyURLsFiltered(filter)
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
@@ -615,13 +655,20 @@ func (s *server) handleExportTXT(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleExportJSON(w http.ResponseWriter, r *http.Request) {
-	targetProfile := exportTargetProfileQuery(r)
-	items, err := s.store.ExportAvailable(targetProfile, clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000))
+	filter := exportAvailableFilterFromRequest(r)
+	filter.Limit = clampInt(anyToInt(r.URL.Query().Get("limit")), 0, 100000)
+	items, err := s.store.ExportAvailableFiltered(filter)
 	if err != nil {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	jsonResponse(w, http.StatusOK, map[string]any{"items": items, "total": len(items), "target_profile": targetProfile})
+	jsonResponse(w, http.StatusOK, map[string]any{
+		"items":          items,
+		"total":          len(items),
+		"target_profile": filter.TargetProfile,
+		"countries":      normalizeCountryCodes(filter.Countries),
+		"country_policy": normalizeGatewayCountryPolicy(filter.CountryPolicy),
+	})
 }
 
 func exportTargetProfileQuery(r *http.Request) string {
@@ -632,6 +679,24 @@ func exportTargetProfileQuery(r *http.Request) string {
 		}
 	}
 	return strings.Join(values, ",")
+}
+
+func exportAvailableFilterFromRequest(r *http.Request) availableProxyFilter {
+	return availableProxyFilter{
+		TargetProfile: exportTargetProfileQuery(r),
+		Countries:     countriesFromQuery(r),
+		CountryPolicy: r.URL.Query().Get("country_policy"),
+	}
+}
+
+func countriesFromQuery(r *http.Request) []string {
+	values := []string{}
+	for _, key := range []string{"country", "countries"} {
+		for _, value := range r.URL.Query()[key] {
+			values = append(values, anyToStringSlice(value)...)
+		}
+	}
+	return normalizeCountryCodes(values)
 }
 
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {

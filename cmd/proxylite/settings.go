@@ -38,6 +38,8 @@ type appSettings struct {
 	GatewayTargetProfile     string   `json:"gateway_target_profile"`
 	GatewayUpstreamLimit     int      `json:"gateway_upstream_limit"`
 	GatewayUpstreamStrategy  string   `json:"gateway_upstream_strategy"`
+	GatewayCountries         []string `json:"gateway_countries"`
+	GatewayCountryPolicy     string   `json:"gateway_country_policy"`
 	GatewayRetryAttempts     int      `json:"gateway_retry_attempts"`
 	GatewayFailureThreshold  int      `json:"gateway_failure_threshold"`
 	GatewayFailureCooldownS  int      `json:"gateway_failure_cooldown_seconds"`
@@ -117,6 +119,8 @@ func defaultAppSettings() appSettings {
 		GatewayTargetProfile:     "generic",
 		GatewayUpstreamLimit:     200,
 		GatewayUpstreamStrategy:  gatewayStrategyRoundRobin,
+		GatewayCountries:         nil,
+		GatewayCountryPolicy:     gatewayCountryPolicyStrict,
 		GatewayRetryAttempts:     gatewayDefaultRetryAttempts,
 		GatewayFailureThreshold:  gatewayDefaultFailureThreshold,
 		GatewayFailureCooldownS:  gatewayDefaultFailureCooldownS,
@@ -250,6 +254,12 @@ func settingsFromPayload(current appSettings, payload map[string]any) appSetting
 	if value, ok := payload["gateway_upstream_strategy"]; ok {
 		settings.GatewayUpstreamStrategy = optionalString(value, settings.GatewayUpstreamStrategy)
 	}
+	if value, ok := payload["gateway_countries"]; ok {
+		settings.GatewayCountries = anyToStringSlice(value)
+	}
+	if value, ok := payload["gateway_country_policy"]; ok {
+		settings.GatewayCountryPolicy = optionalString(value, settings.GatewayCountryPolicy)
+	}
 	if value, ok := payload["gateway_retry_attempts"]; ok {
 		settings.GatewayRetryAttempts = anyToInt(value)
 	}
@@ -293,6 +303,8 @@ func normalizeAppSettings(settings appSettings) appSettings {
 	settings.GatewayTargetProfile = normalizeTargetProfileOrAll(settings.GatewayTargetProfile, "generic")
 	settings.GatewayUpstreamLimit = clampInt(settings.GatewayUpstreamLimit, 1, 2000)
 	settings.GatewayUpstreamStrategy = normalizeGatewayUpstreamStrategy(settings.GatewayUpstreamStrategy)
+	settings.GatewayCountries = normalizeCountryCodes(settings.GatewayCountries)
+	settings.GatewayCountryPolicy = normalizeGatewayCountryPolicy(settings.GatewayCountryPolicy)
 	settings.GatewayRetryAttempts = clampInt(settings.GatewayRetryAttempts, 1, 5)
 	settings.GatewayFailureThreshold = clampInt(settings.GatewayFailureThreshold, 1, 100)
 	settings.GatewayFailureCooldownS = clampInt(settings.GatewayFailureCooldownS, 1, 86400)

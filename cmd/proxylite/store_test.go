@@ -193,6 +193,109 @@ func TestCountAvailableProxyURLsDeduplicatesDetectedProtocol(t *testing.T) {
 	}
 }
 
+func TestAvailableProxyURLsFilteredByCountryAndFallback(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.1.1.1:8080\nhttp://2.2.2.2:8080\nhttp://3.3.3.3:8080", "test", "auto"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	countriesByIP := map[string]string{
+		"1.1.1.1": "US",
+		"2.2.2.2": "JP",
+		"3.3.3.3": "US",
+	}
+	for _, item := range items {
+		country := countriesByIP[item.IP]
+		if country == "" {
+			t.Fatalf("missing country fixture for %s", item.IP)
+		}
+		if err := st.SaveCheckResult(CheckResult{
+			ProxyID:        item.ID,
+			Status:         "available",
+			Grade:          "A",
+			Country:        stringPtr(country),
+			CountryName:    stringPtr(map[string]string{"US": "United States", "JP": "Japan"}[country]),
+			GeoSource:      stringPtr("mmdb"),
+			SuccessRate:    1,
+			TargetProfile:  "openai",
+			RecommendedUse: "openai",
+		}); err != nil {
+			t.Fatalf("save %s result: %v", item.IP, err)
+		}
+	}
+	for _, item := range items {
+		if item.IP != "1.1.1.1" {
+			continue
+		}
+		if err := st.SaveCheckResult(CheckResult{
+			ProxyID:        item.ID,
+			Status:         "available",
+			Grade:          "A",
+			Country:        stringPtr("US"),
+			SuccessRate:    1,
+			TargetProfile:  "grok",
+			RecommendedUse: "grok",
+		}); err != nil {
+			t.Fatalf("save grok fallback fixture: %v", err)
+		}
+	}
+
+	usCount, err := st.CountAvailableProxyURLsFiltered(availableProxyFilter{TargetProfile: "openai", Countries: []string{"us"}})
+	if err != nil {
+		t.Fatalf("count US available urls: %v", err)
+	}
+	if usCount != 2 {
+		t.Fatalf("expected two US upstreams, got %d", usCount)
+	}
+	usItems, total, err := st.ListProxies(proxyFilter{Status: "available", TargetProfile: "openai", Countries: []string{"US"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("list US proxies: %v", err)
+	}
+	if total != 2 || len(usItems) != 2 {
+		t.Fatalf("expected two US proxy records, total=%d items=%#v", total, usItems)
+	}
+	jpURLs, err := st.AvailableProxyURLsFiltered(availableProxyFilter{TargetProfile: "openai", Countries: []string{"jp"}})
+	if err != nil {
+		t.Fatalf("JP available urls: %v", err)
+	}
+	if len(jpURLs) != 1 || jpURLs[0] != "http://2.2.2.2:8080" {
+		t.Fatalf("expected only JP upstream, got %#v", jpURLs)
+	}
+	strictMissing, err := st.AvailableProxyURLsFiltered(availableProxyFilter{TargetProfile: "openai", Countries: []string{"DE"}, CountryPolicy: gatewayCountryPolicyStrict})
+	if err != nil {
+		t.Fatalf("strict missing country urls: %v", err)
+	}
+	if len(strictMissing) != 0 {
+		t.Fatalf("expected strict missing country to return no urls, got %#v", strictMissing)
+	}
+	fallbackMissing, err := st.AvailableProxyURLsFiltered(availableProxyFilter{TargetProfile: "openai", Countries: []string{"DE"}, CountryPolicy: gatewayCountryPolicyFallbackAny})
+	if err != nil {
+		t.Fatalf("fallback missing country urls: %v", err)
+	}
+	if len(fallbackMissing) != 3 {
+		t.Fatalf("expected fallback to return all available urls, got %#v", fallbackMissing)
+	}
+	multiProfileCount, err := st.CountAvailableProxyURLsForProfilesFiltered([]string{"openai", "grok"}, availableProxyFilter{
+		Countries:     []string{"JP"},
+		CountryPolicy: gatewayCountryPolicyFallbackAny,
+	})
+	if err != nil {
+		t.Fatalf("count multi-profile fallback urls: %v", err)
+	}
+	if multiProfileCount != 2 {
+		t.Fatalf("expected per-profile fallback to count JP openai and fallback grok urls, got %d", multiProfileCount)
+	}
+}
+
 func TestSourceHealthFailureCooldownAndRecovery(t *testing.T) {
 	st, err := openStore(":memory:")
 	if err != nil {
@@ -282,6 +385,19 @@ func TestImportProxiesDeduplicatesByProxyKey(t *testing.T) {
 	}
 	if total != 1 {
 		t.Fatalf("expected one stored proxy after duplicate import, got %d", total)
+	}
+}
+
+func TestSettingsNormalizeGatewayCountries(t *testing.T) {
+	settings := settingsFromPayload(defaultAppSettings(), map[string]any{
+		"gateway_countries":      "jp, us, invalid,JP",
+		"gateway_country_policy": "fallback",
+	})
+	if settings.GatewayCountryPolicy != gatewayCountryPolicyFallbackAny {
+		t.Fatalf("expected fallback_any policy, got %q", settings.GatewayCountryPolicy)
+	}
+	if len(settings.GatewayCountries) != 2 || settings.GatewayCountries[0] != "JP" || settings.GatewayCountries[1] != "US" {
+		t.Fatalf("unexpected normalized gateway countries: %#v", settings.GatewayCountries)
 	}
 }
 

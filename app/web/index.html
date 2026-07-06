@@ -391,6 +391,23 @@
                     </div>
                   </label>
                 </div>
+                <div class="mini-grid">
+                  <label>
+                    国家代码
+                    <input id="gatewayCountries" placeholder="US,JP" autocomplete="off" />
+                  </label>
+                  <label>
+                    国家策略
+                    <select id="gatewayCountryPolicy">
+                      <option value="strict">严格匹配</option>
+                      <option value="fallback_any">无匹配时回退</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="geoip-status-row">
+                  <span id="geoipStatusText">GeoIP 未加载</span>
+                  <button id="geoipUpdateBtn" type="button" class="secondary" data-label="更新">更新</button>
+                </div>
               </div>
             </section>
           </div>
@@ -430,6 +447,7 @@
               <option value="gemini">Gemini</option>
               <option value="claude">Claude</option>
             </select>
+            <input id="proxyCountry" placeholder="国家 US / JP" autocomplete="off" />
             <input id="proxySearch" placeholder="搜索 IP / 来源" />
             <button id="deleteFailedBtn" class="danger secondary" data-label="清理失败">清理失败</button>
           </div>

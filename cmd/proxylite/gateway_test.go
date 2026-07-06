@@ -378,6 +378,59 @@ func TestGatewayStatusReportsLoadedAndAvailableUpstreams(t *testing.T) {
 	}
 }
 
+func TestGatewaySelectorFiltersUpstreamsByCountry(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.1.1.1:8080\nhttp://2.2.2.2:8080", "test", "auto"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list proxies: %v", err)
+	}
+	for _, item := range items {
+		country := "US"
+		if item.IP == "2.2.2.2" {
+			country = "JP"
+		}
+		if err := st.SaveCheckResult(CheckResult{
+			ProxyID:        item.ID,
+			Status:         "available",
+			Grade:          "A",
+			Country:        stringPtr(country),
+			SuccessRate:    1,
+			TargetProfile:  "openai",
+			RecommendedUse: "openai",
+		}); err != nil {
+			t.Fatalf("save check result: %v", err)
+		}
+	}
+	gateway := newGatewayServer(st, gatewayConfig{
+		Host:           "127.0.0.1",
+		Port:           0,
+		TargetProfiles: []string{"openai"},
+		UpstreamLimit:  10,
+		Countries:      []string{"JP"},
+		CountryPolicy:  gatewayCountryPolicyStrict,
+	})
+	selected, err := gateway.selectUpstream(gateway.endpoints[0])
+	if err != nil {
+		t.Fatalf("select country-filtered upstream: %v", err)
+	}
+	if selected != "http://2.2.2.2:8080" {
+		t.Fatalf("expected JP upstream, got %q", selected)
+	}
+	status := gateway.endpointStatus(gateway.endpoints[0])
+	if status["available_upstreams"] != 1 || status["country_limited"] != true {
+		t.Fatalf("expected country-limited status with one upstream, got %#v", status)
+	}
+}
+
 func TestGatewayStatusReportsUniqueAvailableAcrossTargets(t *testing.T) {
 	st, err := openStore(":memory:")
 	if err != nil {

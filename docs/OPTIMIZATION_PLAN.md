@@ -13,7 +13,7 @@ ProxyLiteChecker 的核心定位应继续保持清晰：
 - 不发展成多节点控制面，不复制 ProxyPoolChecker 的 agent 调度体系。
 - 重点优化代理质量维护和本机 HTTP/SOCKS5 网关消费体验。
 
-和 `easy_proxies` 相比，ProxyLiteChecker 不应该追求完整 sing-box 节点协议矩阵。Lite 的优势是能自己拉取、检测、去重、按目标维护库存；网关只是消费这些库存的本机入口。
+和完整协议网关类工具相比，ProxyLiteChecker 不应该追求完整 sing-box 节点协议矩阵。Lite 的优势是能自己拉取、检测、去重、按目标维护库存；网关只是消费这些库存的本机入口。
 
 ## 2. 当前基线
 
@@ -92,7 +92,7 @@ gatewayEndpoint
 
 #### A2. 网关失败重试
 
-参考 `easy_proxies` 的 retry 思路，但保持 Lite 简化实现。
+参考成熟代理网关的 retry 思路，但保持 Lite 简化实现。
 
 HTTP 普通请求、HTTP CONNECT、SOCKS5 CONNECT 都应支持：
 

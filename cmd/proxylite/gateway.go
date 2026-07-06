@@ -30,6 +30,8 @@ type gatewayConfig struct {
 	FailureThreshold   int
 	FailureCooldownS   int
 	UpstreamStrategy   string
+	Countries          []string
+	CountryPolicy      string
 	TargetProfiles     []string
 	HTTPProfilePorts   map[string]int
 	Socks5ProfilePorts map[string]int
@@ -123,6 +125,8 @@ func (g *gatewayServer) ApplyRuntimeConfig(cfg gatewayConfig) gatewayConfig {
 	current.FailureThreshold = cfg.FailureThreshold
 	current.FailureCooldownS = cfg.FailureCooldownS
 	current.UpstreamStrategy = cfg.UpstreamStrategy
+	current.Countries = cfg.Countries
+	current.CountryPolicy = cfg.CountryPolicy
 	current = normalizeGatewayConfig(current)
 	g.mu.Lock()
 	g.cfg = current
@@ -230,7 +234,10 @@ func (g *gatewayServer) Status() map[string]any {
 	}
 	uniqueAvailableUpstreamCount := targetAvailableUpstreamCount
 	if g.store != nil {
-		if count, err := g.store.CountAvailableProxyURLsForProfiles(targetProfiles); err == nil {
+		if count, err := g.store.CountAvailableProxyURLsForProfilesFiltered(targetProfiles, availableProxyFilter{
+			Countries:     cfg.Countries,
+			CountryPolicy: cfg.CountryPolicy,
+		}); err == nil {
 			uniqueAvailableUpstreamCount = count
 		}
 	}
@@ -261,6 +268,9 @@ func (g *gatewayServer) Status() map[string]any {
 		"target_available_upstreams": targetAvailableUpstreamCount,
 		"upstream_limit":             cfg.UpstreamLimit,
 		"upstream_strategy":          cfg.UpstreamStrategy,
+		"countries":                  cfg.Countries,
+		"country_policy":             cfg.CountryPolicy,
+		"country_limited":            len(cfg.Countries) > 0,
 		"retry_attempts":             g.gatewayRetryAttempts(),
 		"failure_threshold":          cfg.FailureThreshold,
 		"failure_cooldown_seconds":   cfg.FailureCooldownS,
@@ -304,7 +314,11 @@ func (g *gatewayServer) endpointStatus(endpoint *gatewayEndpoint) map[string]any
 		upstreamCount = selectorSnapshot.Loaded
 		activeUpstreamCount = selectorSnapshot.Active
 		skippedUpstreamCount = selectorSnapshot.Skipped
-		total, err := g.store.CountAvailableProxyURLs(endpoint.TargetProfile)
+		total, err := g.store.CountAvailableProxyURLsFiltered(availableProxyFilter{
+			TargetProfile: endpoint.TargetProfile,
+			Countries:     cfg.Countries,
+			CountryPolicy: cfg.CountryPolicy,
+		})
 		if err == nil {
 			availableUpstreamCount = total
 		} else {
@@ -330,6 +344,9 @@ func (g *gatewayServer) endpointStatus(endpoint *gatewayEndpoint) map[string]any
 		"upstream_limit":           cfg.UpstreamLimit,
 		"upstream_limited":         availableUpstreamCount > upstreamCount,
 		"upstream_strategy":        selectorSnapshot.Strategy,
+		"countries":                cfg.Countries,
+		"country_policy":           cfg.CountryPolicy,
+		"country_limited":          len(cfg.Countries) > 0,
 		"retry_attempts":           selectorSnapshot.RetryAttempts,
 		"failure_threshold":        selectorSnapshot.FailureThreshold,
 		"failure_cooldown_seconds": selectorSnapshot.FailureCooldownSeconds,

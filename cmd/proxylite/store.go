@@ -36,8 +36,12 @@ type proxyRecord struct {
 	LatencyMS        *int    `json:"latency_ms,omitempty"`
 	ExitIP           *string `json:"exit_ip,omitempty"`
 	Country          *string `json:"country,omitempty"`
+	CountryName      *string `json:"country_name,omitempty"`
+	ContinentCode    *string `json:"continent_code,omitempty"`
 	IPType           *string `json:"ip_type,omitempty"`
 	ASNOrg           *string `json:"asn_org,omitempty"`
+	GeoSource        *string `json:"geo_source,omitempty"`
+	GeoUpdatedAt     *string `json:"geo_updated_at,omitempty"`
 	SuccessRate      float64 `json:"success_rate"`
 	TargetProfile    string  `json:"target_profile"`
 	DetectedProtocol *string `json:"detected_protocol,omitempty"`
@@ -65,9 +69,22 @@ type proxyFilter struct {
 	Status        string
 	TargetProfile string
 	Query         string
+	Countries     []string
 	Limit         int
 	Offset        int
 }
+
+type availableProxyFilter struct {
+	TargetProfile string
+	Limit         int
+	Countries     []string
+	CountryPolicy string
+}
+
+const (
+	gatewayCountryPolicyStrict      = "strict"
+	gatewayCountryPolicyFallbackAny = "fallback_any"
+)
 
 var proxyPattern = regexp.MustCompile(`(?i)(?:(https?|socks4|socks5h?)://)?(?:(?P<user>[^:\s/@]+)(?::(?P<pass>[^@\s/]+))?@)?(?P<host>(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?|\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d{1,5})`)
 
@@ -154,8 +171,12 @@ CREATE TABLE IF NOT EXISTS proxies (
   latency_ms INTEGER,
   exit_ip TEXT,
   country TEXT,
+  country_name TEXT,
+  continent_code TEXT,
   ip_type TEXT,
   asn_org TEXT,
+  geo_source TEXT,
+  geo_updated_at TEXT,
   success_rate REAL NOT NULL DEFAULT 0,
   target_profile TEXT NOT NULL DEFAULT 'generic',
   detected_protocol TEXT,
@@ -173,6 +194,7 @@ CREATE TABLE IF NOT EXISTS proxies (
 CREATE INDEX IF NOT EXISTS idx_proxies_status ON proxies(status);
 CREATE INDEX IF NOT EXISTS idx_proxies_target ON proxies(target_profile);
 CREATE INDEX IF NOT EXISTS idx_proxies_source ON proxies(source);
+CREATE INDEX IF NOT EXISTS idx_proxies_country ON proxies(country);
 CREATE INDEX IF NOT EXISTS idx_proxies_quality ON proxies(status, grade, latency_ms);
 CREATE TABLE IF NOT EXISTS proxy_checks (
   proxy_id INTEGER NOT NULL,
@@ -182,8 +204,12 @@ CREATE TABLE IF NOT EXISTS proxy_checks (
   latency_ms INTEGER,
   exit_ip TEXT,
   country TEXT,
+  country_name TEXT,
+  continent_code TEXT,
   ip_type TEXT,
   asn_org TEXT,
+  geo_source TEXT,
+  geo_updated_at TEXT,
   success_rate REAL NOT NULL DEFAULT 0,
   detected_protocol TEXT,
   service_reachable INTEGER NOT NULL DEFAULT 0,
@@ -197,6 +223,7 @@ CREATE TABLE IF NOT EXISTS proxy_checks (
   FOREIGN KEY (proxy_id) REFERENCES proxies(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_proxy_checks_target_status ON proxy_checks(target_profile, status);
+CREATE INDEX IF NOT EXISTS idx_proxy_checks_target_country_status ON proxy_checks(target_profile, country, status);
 CREATE TABLE IF NOT EXISTS source_health (
   source_id TEXT PRIMARY KEY,
   last_fetch_at TEXT,
@@ -232,6 +259,9 @@ WHERE last_checked_at IS NOT NULL AND target_profile != '';
 `); err != nil {
 		return err
 	}
+	if err := s.addMissingColumns(); err != nil {
+		return err
+	}
 	username := firstNonEmpty(adminUsername, "admin")
 	var count int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&count); err != nil {
@@ -246,6 +276,66 @@ WHERE last_checked_at IS NOT NULL AND target_profile != '';
 		return err
 	}
 	return nil
+}
+
+func (s *store) addMissingColumns() error {
+	additions := map[string]map[string]string{
+		"proxies": {
+			"country_name":   "TEXT",
+			"continent_code": "TEXT",
+			"geo_source":     "TEXT",
+			"geo_updated_at": "TEXT",
+		},
+		"proxy_checks": {
+			"country_name":   "TEXT",
+			"continent_code": "TEXT",
+			"geo_source":     "TEXT",
+			"geo_updated_at": "TEXT",
+		},
+	}
+	for table, columns := range additions {
+		for column, definition := range columns {
+			exists, err := s.columnExists(table, column)
+			if err != nil {
+				return err
+			}
+			if exists {
+				continue
+			}
+			if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					return err
+				}
+			}
+		}
+	}
+	_, err := s.db.Exec(`
+CREATE INDEX IF NOT EXISTS idx_proxies_country ON proxies(country);
+CREATE INDEX IF NOT EXISTS idx_proxy_checks_target_country_status ON proxy_checks(target_profile, country, status);
+`)
+	return err
+}
+
+func (s *store) columnExists(table string, column string) (bool, error) {
+	rows, err := s.db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (s *store) UserPasswordHash(username string) (string, bool, error) {
@@ -593,7 +683,8 @@ func (s *store) ListProxies(filter proxyFilter) ([]proxyRecord, int, error) {
 	limit := clampInt(filter.Limit, 1, 100000)
 	offset := clampInt(filter.Offset, 0, 10000000)
 	query := `
-SELECT id, proxy_key, ip, port, protocol, username, password, source, status, grade, latency_ms, exit_ip, country, ip_type, asn_org,
+SELECT id, proxy_key, ip, port, protocol, username, password, source, status, grade, latency_ms,
+       exit_ip, country, country_name, continent_code, ip_type, asn_org, geo_source, geo_updated_at,
        success_rate, target_profile, detected_protocol, service_reachable, api_reachable, cloudflare_status, recommended_use,
        last_error, failure_count, created_at, updated_at, last_checked_at
 FROM proxies` + where + `
@@ -637,7 +728,7 @@ LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?` + where
 SELECT p.id, p.proxy_key, p.ip, p.port, p.protocol, p.username, p.password, p.source,
        COALESCE(c.status, 'untested') AS status,
        COALESCE(c.grade, '') AS grade,
-       c.latency_ms, c.exit_ip, c.country, c.ip_type, c.asn_org,
+       c.latency_ms, c.exit_ip, c.country, c.country_name, c.continent_code, c.ip_type, c.asn_org, c.geo_source, c.geo_updated_at,
        COALESCE(c.success_rate, 0) AS success_rate,
        COALESCE(c.target_profile, ?) AS target_profile,
        c.detected_protocol,
@@ -690,6 +781,12 @@ func filterWhere(filter proxyFilter) (string, []any) {
 		like := "%" + query + "%"
 		args = append(args, like, like, like)
 	}
+	if countries := normalizeCountryCodes(filter.Countries); len(countries) > 0 {
+		clauses = append(clauses, "UPPER(COALESCE(country, '')) IN ("+placeholders(len(countries))+")")
+		for _, country := range countries {
+			args = append(args, country)
+		}
+	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
@@ -711,7 +808,74 @@ func targetFilterWhere(filter proxyFilter) (string, []any) {
 		like := "%" + query + "%"
 		args = append(args, like, like, like)
 	}
+	if countries := normalizeCountryCodes(filter.Countries); len(countries) > 0 {
+		clauses = append(clauses, "UPPER(COALESCE(c.country, '')) IN ("+placeholders(len(countries))+")")
+		for _, country := range countries {
+			args = append(args, country)
+		}
+	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func normalizeCountryCodes(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		for _, part := range strings.Split(strings.ReplaceAll(value, "，", ","), ",") {
+			code := strings.ToUpper(strings.TrimSpace(part))
+			if code == "" || code == "ALL" || seen[code] {
+				continue
+			}
+			if len(code) != 2 {
+				continue
+			}
+			seen[code] = true
+			out = append(out, code)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func normalizeGatewayCountryPolicy(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case gatewayCountryPolicyFallbackAny, "fallback", "fallback-any", "any":
+		return gatewayCountryPolicyFallbackAny
+	default:
+		return gatewayCountryPolicyStrict
+	}
+}
+
+func normalizeAvailableProxyFilter(filter availableProxyFilter) availableProxyFilter {
+	target := strings.ToLower(strings.TrimSpace(filter.TargetProfile))
+	if target != "" && target != "all" {
+		target = normalizeTargetProfile(target)
+	}
+	filter.TargetProfile = target
+	filter.Countries = normalizeCountryCodes(filter.Countries)
+	filter.CountryPolicy = normalizeGatewayCountryPolicy(filter.CountryPolicy)
+	if filter.Limit > 0 {
+		filter.Limit = clampInt(filter.Limit, 1, 100000)
+	}
+	return filter
+}
+
+func shouldFallbackAnyCountry(filter availableProxyFilter) bool {
+	return len(filter.Countries) > 0 && normalizeGatewayCountryPolicy(filter.CountryPolicy) == gatewayCountryPolicyFallbackAny
+}
+
+func placeholders(count int) string {
+	if count <= 0 {
+		return "NULL"
+	}
+	items := make([]string, count)
+	for index := range items {
+		items[index] = "?"
+	}
+	return strings.Join(items, ",")
 }
 
 func (s *store) DeleteProxiesByStatus(status string) (map[string]any, error) {
@@ -817,8 +981,12 @@ SET status = ?,
     latency_ms = ?,
     exit_ip = ?,
     country = ?,
+    country_name = ?,
+    continent_code = ?,
     ip_type = ?,
     asn_org = ?,
+    geo_source = ?,
+    geo_updated_at = ?,
     success_rate = ?,
     target_profile = ?,
     detected_protocol = ?,
@@ -836,8 +1004,12 @@ WHERE id = ?`,
 		nullableInt(result.LatencyMS),
 		nullableString(result.ExitIP),
 		nullableString(result.Country),
+		nullableString(result.CountryName),
+		nullableString(result.ContinentCode),
 		nullableString(result.IPType),
 		nullableString(result.ASNOrg),
+		nullableString(result.GeoSource),
+		nullableString(result.GeoUpdatedAt),
 		result.SuccessRate,
 		targetProfile,
 		nullableString(result.DetectedProtocol),
@@ -856,19 +1028,23 @@ WHERE id = ?`,
 	}
 	_, err = tx.Exec(`
 INSERT INTO proxy_checks (
-  proxy_id, target_profile, status, grade, latency_ms, exit_ip, country, ip_type, asn_org,
+  proxy_id, target_profile, status, grade, latency_ms, exit_ip, country, country_name, continent_code, ip_type, asn_org, geo_source, geo_updated_at,
   success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
   recommended_use, last_error, checked_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'), datetime('now', '+8 hours'))
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'), datetime('now', '+8 hours'))
 ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
   status = excluded.status,
   grade = excluded.grade,
   latency_ms = excluded.latency_ms,
   exit_ip = excluded.exit_ip,
   country = excluded.country,
+  country_name = excluded.country_name,
+  continent_code = excluded.continent_code,
   ip_type = excluded.ip_type,
   asn_org = excluded.asn_org,
+  geo_source = excluded.geo_source,
+  geo_updated_at = excluded.geo_updated_at,
   success_rate = excluded.success_rate,
   detected_protocol = excluded.detected_protocol,
   service_reachable = excluded.service_reachable,
@@ -885,8 +1061,12 @@ ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
 		nullableInt(result.LatencyMS),
 		nullableString(result.ExitIP),
 		nullableString(result.Country),
+		nullableString(result.CountryName),
+		nullableString(result.ContinentCode),
 		nullableString(result.IPType),
 		nullableString(result.ASNOrg),
+		nullableString(result.GeoSource),
+		nullableString(result.GeoUpdatedAt),
 		result.SuccessRate,
 		nullableString(result.DetectedProtocol),
 		boolToInt(result.ServiceReachable),
@@ -971,9 +1151,32 @@ func (s *store) CountProxiesByStatus(status string) (int, error) {
 }
 
 func (s *store) CountAvailableProxyURLs(targetProfile string) (int, error) {
-	target := strings.ToLower(strings.TrimSpace(targetProfile))
+	return s.CountAvailableProxyURLsFiltered(availableProxyFilter{TargetProfile: targetProfile})
+}
+
+func (s *store) CountAvailableProxyURLsFiltered(filter availableProxyFilter) (int, error) {
+	filter = normalizeAvailableProxyFilter(filter)
+	count, err := s.countAvailableProxyURLsFiltered(filter)
+	if err != nil || count > 0 || !shouldFallbackAnyCountry(filter) {
+		return count, err
+	}
+	filter.Countries = nil
+	return s.countAvailableProxyURLsFiltered(filter)
+}
+
+func (s *store) countAvailableProxyURLsFiltered(filter availableProxyFilter) (int, error) {
+	target := strings.ToLower(strings.TrimSpace(filter.TargetProfile))
+	countries := normalizeCountryCodes(filter.Countries)
 	if target != "" && target != "all" {
 		target = normalizeTargetProfile(target)
+		args := []any{target}
+		countryClause := ""
+		if len(countries) > 0 {
+			countryClause = " AND UPPER(COALESCE(c.country, '')) IN (" + placeholders(len(countries)) + ")"
+			for _, country := range countries {
+				args = append(args, country)
+			}
+		}
 		query := `
 SELECT COUNT(*) FROM (
   SELECT
@@ -989,11 +1192,20 @@ SELECT COUNT(*) FROM (
   LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?
   WHERE p.enabled = 1
     AND COALESCE(c.status, 'untested') = 'available'
+` + countryClause + `
   GROUP BY 1, 2, 3, 4, 5
 )`
 		var count int
-		err := s.db.QueryRow(query, target).Scan(&count)
+		err := s.db.QueryRow(query, args...).Scan(&count)
 		return count, err
+	}
+	args := []any{}
+	countryClause := ""
+	if len(countries) > 0 {
+		countryClause = " AND UPPER(COALESCE(country, '')) IN (" + placeholders(len(countries)) + ")"
+		for _, country := range countries {
+			args = append(args, country)
+		}
 	}
 	query := `
 SELECT COUNT(*) FROM (
@@ -1009,20 +1221,58 @@ SELECT COUNT(*) FROM (
   FROM proxies
   WHERE enabled = 1
     AND status = 'available'
+` + countryClause + `
   GROUP BY 1, 2, 3, 4, 5
 )`
 	var count int
-	err := s.db.QueryRow(query).Scan(&count)
+	err := s.db.QueryRow(query, args...).Scan(&count)
 	return count, err
 }
 
 func (s *store) CountAvailableProxyURLsForProfiles(targetProfiles []string) (int, error) {
+	return s.CountAvailableProxyURLsForProfilesFiltered(targetProfiles, availableProxyFilter{})
+}
+
+func (s *store) CountAvailableProxyURLsForProfilesFiltered(targetProfiles []string, filter availableProxyFilter) (int, error) {
+	filter = normalizeAvailableProxyFilter(filter)
+	if shouldFallbackAnyCountry(filter) {
+		return s.countAvailableProxyURLsForProfilesWithPerProfileFallback(targetProfiles, filter)
+	}
+	return s.countAvailableProxyURLsForProfilesFiltered(targetProfiles, filter)
+}
+
+func (s *store) countAvailableProxyURLsForProfilesWithPerProfileFallback(targetProfiles []string, filter availableProxyFilter) (int, error) {
 	profiles := normalizeTargetProfiles(targetProfiles)
-	placeholders := make([]string, 0, len(profiles))
+	seen := map[string]bool{}
+	for _, profile := range profiles {
+		urls, err := s.AvailableProxyURLsFiltered(availableProxyFilter{
+			TargetProfile: profile,
+			Countries:     filter.Countries,
+			CountryPolicy: filter.CountryPolicy,
+		})
+		if err != nil {
+			return 0, err
+		}
+		for _, proxyURL := range urls {
+			seen[proxyURL] = true
+		}
+	}
+	return len(seen), nil
+}
+
+func (s *store) countAvailableProxyURLsForProfilesFiltered(targetProfiles []string, filter availableProxyFilter) (int, error) {
+	profiles := normalizeTargetProfiles(targetProfiles)
 	args := make([]any, 0, len(profiles))
 	for _, profile := range profiles {
-		placeholders = append(placeholders, "?")
 		args = append(args, profile)
+	}
+	countries := normalizeCountryCodes(filter.Countries)
+	countryClause := ""
+	if len(countries) > 0 {
+		countryClause = " AND UPPER(COALESCE(c.country, '')) IN (" + placeholders(len(countries)) + ")"
+		for _, country := range countries {
+			args = append(args, country)
+		}
 	}
 	query := `
 SELECT COUNT(*) FROM (
@@ -1039,7 +1289,8 @@ SELECT COUNT(*) FROM (
   JOIN proxy_checks c ON c.proxy_id = p.id
   WHERE p.enabled = 1
     AND c.status = 'available'
-    AND c.target_profile IN (` + strings.Join(placeholders, ",") + `)
+    AND c.target_profile IN (` + placeholders(len(profiles)) + `)
+` + countryClause + `
   GROUP BY 1, 2, 3, 4, 5
 )`
 	var count int
@@ -1048,23 +1299,51 @@ SELECT COUNT(*) FROM (
 }
 
 func (s *store) ExportAvailable(targetProfile string, limit int) ([]proxyRecord, error) {
-	profiles := normalizeTargetProfilesOrNil(targetProfile)
+	return s.ExportAvailableFiltered(availableProxyFilter{TargetProfile: targetProfile, Limit: limit})
+}
+
+func (s *store) ExportAvailableFiltered(filter availableProxyFilter) ([]proxyRecord, error) {
+	filter = normalizeAvailableProxyFilter(filter)
+	items, err := s.exportAvailableFiltered(filter)
+	if err != nil || len(items) > 0 || !shouldFallbackAnyCountry(filter) {
+		return items, err
+	}
+	filter.Countries = nil
+	return s.exportAvailableFiltered(filter)
+}
+
+func (s *store) exportAvailableFiltered(filter availableProxyFilter) ([]proxyRecord, error) {
+	profiles := normalizeTargetProfilesOrNil(filter.TargetProfile)
 	if len(profiles) > 0 {
-		return s.ExportAvailableForProfiles(profiles, limit)
+		return s.exportAvailableForProfilesFiltered(profiles, filter)
 	}
-	filter := proxyFilter{Status: "available", TargetProfile: targetProfile, Limit: 100000}
-	if limit > 0 {
-		filter.Limit = limit
+	listFilter := proxyFilter{Status: "available", TargetProfile: filter.TargetProfile, Countries: filter.Countries, Limit: 100000}
+	if filter.Limit > 0 {
+		listFilter.Limit = filter.Limit
 	}
-	items, _, err := s.ListProxies(filter)
+	items, _, err := s.ListProxies(listFilter)
 	return items, err
 }
 
 func (s *store) ExportAvailableForProfiles(targetProfiles []string, limit int) ([]proxyRecord, error) {
+	return s.ExportAvailableForProfilesFiltered(targetProfiles, availableProxyFilter{Limit: limit})
+}
+
+func (s *store) ExportAvailableForProfilesFiltered(targetProfiles []string, filter availableProxyFilter) ([]proxyRecord, error) {
+	filter = normalizeAvailableProxyFilter(filter)
+	items, err := s.exportAvailableForProfilesFiltered(targetProfiles, filter)
+	if err != nil || len(items) > 0 || !shouldFallbackAnyCountry(filter) {
+		return items, err
+	}
+	filter.Countries = nil
+	return s.exportAvailableForProfilesFiltered(targetProfiles, filter)
+}
+
+func (s *store) exportAvailableForProfilesFiltered(targetProfiles []string, filter availableProxyFilter) ([]proxyRecord, error) {
 	targetProfiles = normalizeTargetProfiles(targetProfiles)
 	maxItems := 100000
-	if limit > 0 {
-		maxItems = clampInt(limit, 1, 100000)
+	if filter.Limit > 0 {
+		maxItems = clampInt(filter.Limit, 1, 100000)
 	}
 	items := []proxyRecord{}
 	for _, profile := range targetProfiles {
@@ -1072,7 +1351,7 @@ func (s *store) ExportAvailableForProfiles(targetProfiles []string, limit int) (
 		if remaining <= 0 {
 			break
 		}
-		batch, _, err := s.ListProxies(proxyFilter{Status: "available", TargetProfile: profile, Limit: remaining})
+		batch, _, err := s.ListProxies(proxyFilter{Status: "available", TargetProfile: profile, Countries: filter.Countries, Limit: remaining})
 		if err != nil {
 			return nil, err
 		}
@@ -1082,7 +1361,14 @@ func (s *store) ExportAvailableForProfiles(targetProfiles []string, limit int) (
 }
 
 func (s *store) AvailableProxyURLs(limit int, targetProfile string) ([]string, error) {
-	items, err := s.ExportAvailable(targetProfile, 0)
+	return s.AvailableProxyURLsFiltered(availableProxyFilter{TargetProfile: targetProfile, Limit: limit})
+}
+
+func (s *store) AvailableProxyURLsFiltered(filter availableProxyFilter) ([]string, error) {
+	filter = normalizeAvailableProxyFilter(filter)
+	exportFilter := filter
+	exportFilter.Limit = 0
+	items, err := s.ExportAvailableFiltered(exportFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -1095,21 +1381,21 @@ func (s *store) AvailableProxyURLs(limit int, targetProfile string) ([]string, e
 			out = append(out, proxyURL)
 		}
 	}
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
 	}
 	return out, nil
 }
 
 func scanProxy(rows *sql.Rows) (proxyRecord, error) {
 	var item proxyRecord
-	var username, password, exitIP, country, ipType, asnOrg, detected, cloudflare, lastError, lastChecked sql.NullString
+	var username, password, exitIP, country, countryName, continentCode, ipType, asnOrg, geoSource, geoUpdatedAt, detected, cloudflare, lastError, lastChecked sql.NullString
 	var latencyInt sql.NullInt64
 	var apiReachableInt sql.NullInt64
 	var serviceReachable int
 	err := rows.Scan(
 		&item.ID, &item.ProxyKey, &item.IP, &item.Port, &item.Protocol, &username, &password, &item.Source, &item.Status, &item.Grade,
-		&latencyInt, &exitIP, &country, &ipType, &asnOrg, &item.SuccessRate, &item.TargetProfile, &detected, &serviceReachable,
+		&latencyInt, &exitIP, &country, &countryName, &continentCode, &ipType, &asnOrg, &geoSource, &geoUpdatedAt, &item.SuccessRate, &item.TargetProfile, &detected, &serviceReachable,
 		&apiReachableInt, &cloudflare, &item.RecommendedUse, &lastError, &item.FailureCount, &item.CreatedAt, &item.UpdatedAt, &lastChecked,
 	)
 	if err != nil {
@@ -1122,8 +1408,12 @@ func scanProxy(rows *sql.Rows) (proxyRecord, error) {
 	}
 	item.ExitIP = nullStringPtr(exitIP)
 	item.Country = nullStringPtr(country)
+	item.CountryName = nullStringPtr(countryName)
+	item.ContinentCode = nullStringPtr(continentCode)
 	item.IPType = nullStringPtr(ipType)
 	item.ASNOrg = nullStringPtr(asnOrg)
+	item.GeoSource = nullStringPtr(geoSource)
+	item.GeoUpdatedAt = nullStringPtr(geoUpdatedAt)
 	item.DetectedProtocol = nullStringPtr(detected)
 	item.ServiceReachable = serviceReachable == 1
 	if apiReachableInt.Valid {
