@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2 - 2026-07-07
+
+- Refine the Web UI visual system with more restrained colors, softer surfaces, and clearer interactive states.
+- Tighten dashboard, quick action, settings, proxy source, and gateway card spacing to reduce uneven alignment and empty areas.
+- Compact gateway recent-upstream and diagnostic rows while keeping the waiting state visible.
+- Improve responsive layout consistency for the single-page console.
+
 ## 0.3.1 - 2026-07-07
 
 - Add GeoIP-backed country detection for imported and checked proxies.
