@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3 - 2026-07-07
+
+- Restore equal-height dashboard, source/import, task, settings, and gateway panel alignment after the UI polish pass.
+- Move runtime settings into a four-column desktop layout to remove the large empty area left by the wrapped gateway panel.
+- Keep gateway recent-upstream cards aligned with a fixed three-row compact history.
+- Change the automatic-check performance controls to a readable 2x2 grid.
+
 ## 0.3.2 - 2026-07-07
 
 - Refine the Web UI visual system with more restrained colors, softer surfaces, and clearer interactive states.

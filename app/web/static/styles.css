@@ -486,17 +486,17 @@ textarea {
 .top-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.34fr) minmax(320px, 0.66fr);
-  align-items: start;
-  gap: 10px;
-  margin-bottom: 10px;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .content-grid {
   display: grid;
   grid-template-columns: minmax(360px, 0.95fr) minmax(420px, 1.05fr);
-  align-items: start;
-  gap: 10px;
-  margin-bottom: 10px;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .config-grid {
@@ -536,15 +536,15 @@ textarea {
 .quick-action-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
+  gap: 8px;
 }
 
 .action-button {
   display: grid;
   align-content: center;
   gap: 4px;
-  min-height: 62px;
-  padding: 10px 11px;
+  min-height: 66px;
+  padding: 11px 12px;
   text-align: left;
   text-decoration: none;
   border: 1px solid var(--line);
@@ -600,16 +600,16 @@ textarea {
 .quick-param-grid {
   display: grid;
   grid-template-columns: minmax(124px, 0.75fr) minmax(360px, 1.7fr) minmax(124px, 0.7fr) minmax(150px, 0.85fr);
-  gap: 8px;
-  margin-top: 8px;
+  gap: 9px;
+  margin-top: 10px;
 }
 
 .field-card {
   display: grid;
   align-content: start;
   gap: 6px;
-  min-height: 68px;
-  padding: 8px;
+  min-height: 72px;
+  padding: 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface-soft);
@@ -775,13 +775,13 @@ textarea {
 .import-panel {
   display: flex;
   flex-direction: column;
-  min-height: 236px;
+  min-height: 246px;
 }
 
 .sources-panel .source-list,
 .import-panel textarea {
   flex: 1 1 auto;
-  min-height: 164px;
+  min-height: 174px;
 }
 
 .progress {
@@ -802,9 +802,9 @@ textarea {
 }
 
 .job-message {
-  min-height: 38px;
-  margin-top: 8px;
-  padding: 9px;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--surface-soft);
@@ -820,7 +820,7 @@ textarea {
 }
 
 .task-panel .job-message {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
 }
 
 .progress::after {
@@ -837,18 +837,22 @@ textarea {
 
 .settings-stack {
   display: grid;
-  grid-template-columns: minmax(260px, 0.98fr) minmax(420px, 1.28fr) minmax(260px, 0.98fr);
-  align-items: start;
-  gap: 8px;
+  grid-template-columns:
+    minmax(250px, 0.95fr)
+    minmax(340px, 1.2fr)
+    minmax(250px, 0.95fr)
+    minmax(250px, 0.95fr);
+  align-items: stretch;
+  gap: 10px;
   min-width: 0;
 }
 
 .settings-group {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  padding: 10px;
+  padding: 11px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-soft);
@@ -887,7 +891,7 @@ textarea {
 .settings-group-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -921,13 +925,13 @@ textarea {
 .maintenance-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 6px;
+  gap: 7px;
 }
 
 .mini-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
@@ -936,7 +940,7 @@ textarea {
 }
 
 .mini-grid.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .mini-grid label {
@@ -1199,21 +1203,22 @@ td:not(.proxy-cell) {
 }
 
 .gateway-panel {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .gateway-card-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
+  align-items: stretch;
 }
 
 .gateway-card {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-soft);
@@ -1234,7 +1239,7 @@ td:not(.proxy-cell) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 7px;
+  gap: 8px;
 }
 
 .gateway-card-head strong {
@@ -1245,8 +1250,8 @@ td:not(.proxy-cell) {
 .gateway-card-head span {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 0 7px;
+  min-height: 24px;
+  padding: 0 8px;
   border-radius: 999px;
   background: var(--teal-soft);
   color: var(--teal);
@@ -1263,8 +1268,8 @@ td:not(.proxy-cell) {
 .gateway-card-meta span {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 0 6px;
+  min-height: 22px;
+  padding: 0 7px;
   border-radius: 999px;
   background: #fff;
   color: var(--muted-strong);
@@ -1274,7 +1279,7 @@ td:not(.proxy-cell) {
 
 .endpoint-pair {
   display: grid;
-  gap: 6px;
+  gap: 7px;
 }
 
 .endpoint-row {
@@ -1300,7 +1305,7 @@ td:not(.proxy-cell) {
   display: block;
   width: 100%;
   min-width: 0;
-  padding: 5px 7px;
+  padding: 6px 7px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fff;
@@ -1314,7 +1319,7 @@ td:not(.proxy-cell) {
 
 .copy-button {
   min-width: auto;
-  min-height: 29px;
+  min-height: 31px;
   padding: 0 9px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, #fff, #edf3f8);
@@ -1334,9 +1339,10 @@ td:not(.proxy-cell) {
 
 .recent-list {
   display: grid;
-  gap: 3px;
-  height: auto;
-  min-height: 0;
+  grid-template-rows: repeat(3, 24px);
+  gap: 4px;
+  height: 80px;
+  min-height: 80px;
   overflow: hidden;
 }
 
@@ -1346,7 +1352,7 @@ td:not(.proxy-cell) {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  min-height: 22px;
+  min-height: 24px;
 }
 
 .recent-row span {
@@ -1354,7 +1360,7 @@ td:not(.proxy-cell) {
   align-items: center;
   justify-content: center;
   min-width: 0;
-  height: 20px;
+  height: 22px;
   border-radius: 6px;
   background: #e8eef5;
   color: var(--muted);
@@ -1367,8 +1373,8 @@ td:not(.proxy-cell) {
 .recent-row code {
   display: block;
   min-width: 0;
-  height: 22px;
-  padding: 3px 7px;
+  height: 24px;
+  padding: 4px 7px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fff;
@@ -1387,7 +1393,7 @@ td:not(.proxy-cell) {
   background: #f4f7fa;
 }
 
-.recent-row.empty:not(:first-child) {
+.recent-row:nth-child(n + 4) {
   display: none;
 }
 
