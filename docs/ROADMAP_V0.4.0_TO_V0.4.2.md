@@ -1,6 +1,6 @@
 # ProxyLiteChecker v0.4.0 至 v0.4.2 详细开发路线图
 
-- 状态：v0.4.2 实现与本机 8899 验收完成；当前工作包 `GITHUB-RELEASE`
+- 状态：已完成；v0.4.0 至 v0.4.2 全部实现、验收并发布
 - 基线版本：`v0.3.4`
 - 基线提交：`73c6d4fb34f2e7898ee4b21bf9b3b9090b9f4d80`
 - 制定日期：2026-07-10
@@ -708,7 +708,7 @@ proxies
 - [x] 前端轮询不重叠，任务期间不会重复刷新全部资源。
 - [x] 从 v0.3.4 直接升级至 v0.4.2 的迁移链完整通过。
 - [x] README、部署文档、API 说明、CHANGELOG 和接手文档全部更新。
-- [ ] GitHub CI、Release 和 GHCR 多架构发布成功后，将本路线图状态改为“已完成”。
+- [x] GitHub CI、Release 和 GHCR 多架构发布成功后，将本路线图状态改为“已完成”。
 
 ### 6.10 v0.4.2 回滚和范围外事项
 
@@ -1051,3 +1051,25 @@ GitHub 发布：
 - 正在执行：`git add`、创建 v0.4.2 发布提交并推送 `main`。
 - 当前阻塞：无。
 - 唯一下一步：推送发布提交后创建并推送 annotated `v0.4.2` tag。
+
+- 断点更新：v0.4.2 发布提交 `6a74ec8` 已创建并推送到 GitHub `main`。
+- 正在执行：创建 annotated `v0.4.2` tag 并推送，随后监控 CI、Release 和 Docker 工作流。
+- 当前阻塞：无。
+- 唯一下一步：推送 `v0.4.2` tag 触发发布工作流。
+
+- 断点更新：annotated `v0.4.2` tag 已指向 `6a74ec872117f698984f9e490f06448cedca7999` 并推送成功。
+- 正在执行：轮询 GitHub Actions，确认 main/tag 触发的 CI、Release 与 Docker 工作流全部成功；随后核验 Release 8 个资产和 GHCR amd64/arm64 manifest。
+- 当前阻塞：无，等待远端工作流完成。
+- 唯一下一步：取得全部发布工作流终态。
+
+- 断点更新：CI `29086857798` 与 Release `29086900834` 已成功；GitHub Release `v0.4.2` 已公开，六平台二进制、源码包和 `SHA256SUMS` 共 8 个资产全部为 uploaded。
+- 正在执行：继续轮询 main Docker `29086857789` 与 tag Docker `29086900843`，成功后核验 GHCR `v0.4.2` amd64/arm64 manifest。
+- 当前阻塞：无，等待两条 Docker 工作流完成。
+- 唯一下一步：取得 Docker 工作流成功终态并核验镜像。
+
+- 断点更新：main Docker `29086857789` 与 tag Docker `29086900843` 均成功；四条 Actions 全部完成。GHCR `ghcr.io/ry-zzcn/proxylitechecker:v0.4.2` 为 OCI multi-arch index，摘要 `sha256:19284d77a4293cc0eaaa64aa52ddb7cc31ae8bbb8da5f2ecbe911019fdf158fd`，包含 `linux/amd64` 和 `linux/arm64`。
+- 发布结果：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.2>；发布提交 `6a74ec8`；annotated tag `v0.4.2`；8 个资产全部 uploaded。
+- 当前工作包：`v0.4.2 / COMPLETE`。
+- 正在执行：提交并推送本次发布后进度记录，确认 post-release CI/Docker 和工作区干净。
+- 当前阻塞：无。
+- 唯一下一步：完成发布后文档提交与最终工作区审计；之后等待用户制定下一路线。
