@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scrip
 部署指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.4
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.5
 ```
 
 ## 升级
@@ -133,11 +133,12 @@ sudo docker compose logs -f
 - 自动拉取、低库存补源、自动检测、失败清理和过期重检。
 - 检测目标支持常规、OpenAI、Grok、Gemini、Claude。
 - 一个代理的多目标检测共享协议、出口 IP 和 GeoIP 探测，并原子保存全部结果。
+- 检测默认总并发为 `100`，可在 Web 控制台设置为 `1-300`，保存后对运行中任务热更新。
 - 外部 IP 元数据通过有界后台队列和 SQLite 缓存异步补充。
 - 任务历史、调度时间、失败退避和重启中断状态持久化。
 - 提供按目标和国家筛选的 TXT/JSON 导出。
 - 每个目标提供固定 HTTP/SOCKS5 本机网关，支持 EWMA、隔离、half-open 和降级选路。
-- 原生 Web 控制台支持浅色/深色主题、区域导航、可折叠自动化设置和移动端代理卡片。
+- 原生 Web 控制台支持浅色/深色主题、精确区域导航、单开自动化设置、秒级动态数据、30 条内存运行日志和移动端代理卡片。
 
 ## 默认端口
 
@@ -192,6 +193,7 @@ sudo docker compose logs -f
 - 查看基础链路状态与每个目标的独立能力。
 - 配置自动拉取、自动检测、低库存维护、TTL 和清理策略。
 - 查看持久化任务历史、调度退避、网关池龄、电路状态和缓存新鲜度。
+- 查看代理进度、目标检测项、逐目标进度、当前总并发、服务运行时间和最近 30 条简体中文运行日志。
 - 下载当前目标的 TXT/JSON 代理列表。
 
 命名目标只有对应 Web 或 API 可达时才会进入导出和网关池。仅基础出口可用的代理保留 `base` 诊断能力，但不会被误计为 OpenAI、Grok、Gemini 或 Claude 可用。
@@ -207,6 +209,7 @@ sudo docker compose logs -f
 | `GET /api/bootstrap` | 控制台初始化数据 |
 | `GET /api/proxies` | 代理、基础状态和目标状态 |
 | `GET /api/stats` | 聚合统计与缓存新鲜度 |
+| `GET /api/runtime` | 启动时间、运行时长、最近日志和检测并发 |
 | `GET /api/jobs` | 持久化任务历史 |
 | `GET /api/scheduler/status` | 自动调度状态 |
 | `GET /api/gateway/status` | 网关、池和电路诊断 |
@@ -234,7 +237,7 @@ docker run -d --name proxylitechecker \
   -e SECRET_KEY='请改成强随机字符串' \
   -e PLC_REQUIRE_SECURE=1 \
   -v proxylite-data:/app/data \
-  ghcr.io/ry-zzcn/proxylitechecker:v0.4.4
+  ghcr.io/ry-zzcn/proxylitechecker:v0.4.5
 ```
 
 ## 手动下载二进制
@@ -285,4 +288,5 @@ go build -o bin/proxylite ./cmd/proxylite
 - [项目接手与实时进度](docs/PROJECT_HANDOFF.md)
 - [v0.4.3 一键部署路线图](docs/ROADMAP_V0.4.3.md)
 - [v0.4.4 前端 UI 优化路线图](docs/ROADMAP_V0.4.4.md)
+- [v0.4.5 实时控制台与任务可观测性路线图](docs/ROADMAP_V0.4.5.md)
 - [更新记录](CHANGELOG.md)

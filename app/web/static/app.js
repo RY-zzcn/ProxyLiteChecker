@@ -9,6 +9,8 @@ const state = {
   watchedJobId: null,
   pollTimer: null,
   gatewayTimer: null,
+  liveCycle: 0,
+  runtime: null,
   inFlightRequests: new Map(),
   sourceSelected: 0,
   proxies: {
@@ -74,6 +76,20 @@ function durationText(milliseconds) {
   return `${Math.round(value / 60000)} 分钟`;
 }
 
+function uptimeText(seconds) {
+  let remaining = Math.max(0, Math.floor(Number(seconds || 0)));
+  const days = Math.floor(remaining / 86400);
+  remaining %= 86400;
+  const hours = Math.floor(remaining / 3600);
+  remaining %= 3600;
+  const minutes = Math.floor(remaining / 60);
+  const secs = remaining % 60;
+  if (days) return `${days} 天 ${hours} 小时 ${minutes} 分`;
+  if (hours) return `${hours} 小时 ${minutes} 分 ${secs} 秒`;
+  if (minutes) return `${minutes} 分 ${secs} 秒`;
+  return `${secs} 秒`;
+}
+
 function formatNumber(value) {
   return NUMBER_FORMATTER.format(Number(value || 0));
 }
@@ -106,7 +122,7 @@ function initializeInterface() {
 function setupSectionNavigation() {
   const links = [...document.querySelectorAll("[data-section-link]")];
   const sections = links.map((link) => document.getElementById(link.dataset.sectionLink)).filter(Boolean);
-  if (!links.length || !sections.length || !("IntersectionObserver" in window)) return;
+  if (!links.length || !sections.length) return;
   const activate = (id) => {
     links.forEach((link) => {
       const active = link.dataset.sectionLink === id;
@@ -115,18 +131,69 @@ function setupSectionNavigation() {
       else link.removeAttribute("aria-current");
     });
   };
-  const observer = new IntersectionObserver(
-    (entries) => {
-      const visible = entries
-        .filter((entry) => entry.isIntersecting)
-        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-      if (visible) activate(visible.target.id);
-    },
-    { rootMargin: "-15% 0px -75% 0px", threshold: [0, 0.05, 0.2] },
+  let scheduled = false;
+  let navigationLock = "";
+  let navigationUnlockTimer = null;
+  const stickyHeaderOffset = () => {
+    const header = document.querySelector(".workspace-header");
+    if (!header || getComputedStyle(header).position !== "sticky") return 12;
+    return Math.ceil(header.getBoundingClientRect().bottom);
+  };
+  const updateFromScroll = () => {
+    scheduled = false;
+    if (navigationLock) {
+      activate(navigationLock);
+      return;
+    }
+    const threshold = stickyHeaderOffset() + 2;
+    let current = sections[0];
+    for (const section of sections) {
+      if (section.getBoundingClientRect().top <= threshold) current = section;
+      else break;
+    }
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 8) {
+      current = sections[sections.length - 1];
+    }
+    activate(current.id);
+  };
+  const scheduleUpdate = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(updateFromScroll);
+  };
+  links.forEach((link) =>
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      const section = document.getElementById(link.dataset.sectionLink);
+      if (!section) return;
+      const spacer = el("sectionScrollSpacer");
+      navigationLock = section.id;
+      clearTimeout(navigationUnlockTimer);
+      activate(section.id);
+      if (spacer) spacer.style.height = "0px";
+      const offset = stickyHeaderOffset();
+      const targetTop = Math.max(0, window.scrollY + section.getBoundingClientRect().top - offset);
+      const maximumScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      if (spacer && targetTop > maximumScroll) {
+        spacer.style.height = `${Math.ceil(targetTop - maximumScroll + 12)}px`;
+        void spacer.offsetHeight;
+      }
+      const root = document.documentElement;
+      const previousScrollBehavior = root.style.scrollBehavior;
+      root.style.scrollBehavior = "auto";
+      window.scrollTo(0, targetTop);
+      root.style.scrollBehavior = previousScrollBehavior;
+      history.replaceState(null, "", `#${section.id}`);
+      navigationUnlockTimer = setTimeout(() => {
+        navigationLock = "";
+        scheduleUpdate();
+      }, 120);
+    }),
   );
-  sections.forEach((section) => observer.observe(section));
-  links.forEach((link) => link.addEventListener("click", () => activate(link.dataset.sectionLink)));
+  window.addEventListener("scroll", scheduleUpdate, { passive: true });
+  window.addEventListener("resize", scheduleUpdate);
   activate(sections[0].id);
+  scheduleUpdate();
 }
 
 async function api(path, options = {}) {
@@ -287,7 +354,7 @@ function defaultSettings() {
     check_target_profile: "generic",
     check_target_profiles: ["generic"],
     check_limit: 500,
-    check_concurrent: 50,
+    check_concurrent: 100,
     check_rounds: 1,
     check_request_timeout: 6,
     check_hard_timeout: 60,
@@ -406,7 +473,7 @@ async function bootstrap() {
     startPolling();
   }
   loadGeoIP().catch(() => {});
-  await loadProxies();
+  await Promise.all([loadProxies(), loadRuntime()]);
   if (!state.pollTimer) startGatewayPolling();
 }
 
@@ -823,6 +890,8 @@ function renderJobs(jobs) {
     el("jobProgress").setAttribute("aria-valuenow", "0");
     el("jobProgress").setAttribute("aria-valuetext", "空闲");
     el("cancelJobBtn").disabled = true;
+    el("jobMeta").textContent = "当前无活动任务";
+    el("jobTargets").innerHTML = "";
     return;
   }
   const percent = pct(job.done, job.total);
@@ -838,17 +907,83 @@ function renderJobs(jobs) {
     cancelled: "已取消",
     interrupted: "重启中断",
   }[job.status] || job.status;
-  el("taskSubtitle").textContent = `${typeText} · ${statusText} · ${job.done}/${job.total}`;
-  el("jobMessage").textContent = `${job.message || ""} ${percent}%`;
+  const result = job.result || {};
+  const proxyDone = Number(result.proxy_done || 0);
+  const proxyTotal = Number(result.proxy_total || 0);
+  const itemDone = Number(result.target_item_done ?? job.done ?? 0);
+  const itemTotal = Number(result.target_item_total ?? job.total ?? 0);
+  const progressText = job.type === "check" && proxyTotal > 0
+    ? `代理 ${formatNumber(proxyDone)}/${formatNumber(proxyTotal)} · 目标项 ${formatNumber(itemDone)}/${formatNumber(itemTotal)}`
+    : `${formatNumber(job.done)}/${formatNumber(job.total)}`;
+  el("taskSubtitle").textContent = `${typeText} · ${statusText} · ${progressText}`;
+  el("jobMessage").textContent = job.message || `${typeText}${statusText}`;
   el("progressBar").style.width = `${percent}%`;
   el("jobProgress").setAttribute("aria-valuenow", String(percent));
   el("jobProgress").setAttribute("aria-valuetext", `${typeText}${statusText}，${percent}%`);
   el("cancelJobBtn").disabled = job.status !== "running";
+  const concurrency = result.check_concurrency || {};
+  const targetProfiles = result.target_profiles || job.params?.target_profiles || [];
+  const modeText = result.execution_mode === "proxy_parallel_target_ordered"
+    ? "代理并行；单代理内按所选目标顺序检测"
+    : "任务按当前配置执行";
+  const concurrencyText = job.type === "check"
+    ? `并发 ${formatNumber(concurrency.active || 0)}/${formatNumber(concurrency.limit || job.params?.concurrent || 100)}（可热更新）`
+    : "";
+  el("jobMeta").textContent = [modeText, concurrencyText].filter(Boolean).join(" · ");
+  el("jobTargets").innerHTML = renderJobTargetProgress(targetProfiles, result.target_progress || {});
+}
+
+function renderJobTargetProgress(profiles, progress) {
+  return (profiles || [])
+    .map((profile) => {
+      const item = progress[profile] || {};
+      const done = Number(item.done || 0);
+      const total = Number(item.total || 0);
+      const percent = pct(done, total);
+      return `
+        <div class="job-target-chip">
+          <span><strong>${escapeHtml(targetLabel(profile))}</strong><small>${formatNumber(done)}/${formatNumber(total)}</small></span>
+          <i aria-hidden="true"><b style="width:${percent}%"></b></i>
+        </div>
+      `;
+    })
+    .join("");
 }
 
 async function loadStats() {
   const stats = await api("/api/stats");
   renderStats(stats);
+}
+
+async function loadRuntime() {
+  const runtime = await api("/api/runtime");
+  renderRuntime(runtime);
+}
+
+function renderRuntime(runtime) {
+  state.runtime = runtime || {};
+  el("runtimeUptime").textContent = uptimeText(state.runtime.uptime_seconds);
+  el("runtimeStartedAt").textContent = displayTimestamp(state.runtime.started_at);
+  const concurrency = state.runtime.check_concurrency || {};
+  el("runtimeConcurrency").textContent = `${formatNumber(concurrency.active || 0)} / ${formatNumber(concurrency.limit || 100)}`;
+  const logs = (state.runtime.logs || []).slice(-30).reverse();
+  el("runtimeLogs").innerHTML = logs.length
+    ? logs
+        .map(
+          (entry) => `
+            <div class="runtime-log-row ${escapeHtml(entry.level || "info")}">
+              <time>${escapeHtml(displayTimestamp(entry.time))}</time>
+              <span>${escapeHtml(runtimeLevelLabel(entry.level))}</span>
+              <code>${escapeHtml(entry.message || "")}</code>
+            </div>
+          `,
+        )
+        .join("")
+    : `<div class="runtime-log-empty">暂无运行日志</div>`;
+}
+
+function runtimeLevelLabel(level) {
+  return { info: "信息", warning: "警告", error: "错误" }[String(level || "").toLowerCase()] || "信息";
 }
 
 async function loadGateway() {
@@ -882,6 +1017,26 @@ async function loadActiveJobs() {
 async function loadSettings() {
   const payload = await api("/api/settings");
   renderSettings(payload.settings, payload.scheduler);
+}
+
+async function loadScheduler() {
+  const scheduler = await api("/api/scheduler/status");
+  state.scheduler = scheduler;
+  renderSchedulerText(scheduler);
+}
+
+async function loadSources() {
+  const existingControls = [...document.querySelectorAll(".source-check")];
+  const selected = new Set(existingControls.filter((input) => input.checked).map((input) => input.value));
+  const payload = await api("/api/sources");
+  state.sources = payload.items || [];
+  renderSources();
+  if (existingControls.length) {
+    document.querySelectorAll(".source-check").forEach((input) => {
+      input.checked = selected.has(input.value);
+    });
+    updateSelectedSources();
+  }
 }
 
 async function loadProxies() {
@@ -984,7 +1139,7 @@ async function runCheck(event) {
         target_profiles: targetProfiles,
         target_profile: targetProfiles[0],
         limit: Number(el("quickCheckLimit").value || 500),
-        concurrent: Number(el("settingsCheckConcurrent").value || 50),
+        concurrent: Number(el("settingsCheckConcurrent").value || 100),
         rounds: Number(el("settingsCheckRounds").value || 1),
         request_timeout: checkTimeout,
         hard_timeout: Math.max(checkTimeout, hardTimeout),
@@ -1010,18 +1165,27 @@ function startPolling() {
     state.pollTimer = null;
     if (document.hidden || el("appView").hidden) return;
     try {
+      const cycle = ++state.liveCycle;
       let job = null;
       if (state.watchedJobId) {
-        job = await api(`/api/jobs/${state.watchedJobId}`);
+        const requests = [api(`/api/jobs/${state.watchedJobId}`), loadStats(), loadRuntime()];
+        if (cycle % 2 === 0) requests.push(loadGateway(), loadProxies());
+        if (cycle % 2 === 0 && state.activeJob?.type === "fetch") requests.push(loadSources());
+        if (cycle % 5 === 0) requests.push(loadScheduler());
+        [job] = await Promise.all(requests);
         renderJobs([job]);
       } else {
-        const jobs = await loadActiveJobs();
+        const requests = [loadActiveJobs(), loadStats(), loadRuntime()];
+        if (cycle % 2 === 0) requests.push(loadGateway(), loadProxies());
+        if (cycle % 2 === 0 && state.activeJob?.type === "fetch") requests.push(loadSources());
+        if (cycle % 5 === 0) requests.push(loadScheduler());
+        const [jobs] = await Promise.all(requests);
         job = jobs[0] || null;
         if (job) state.watchedJobId = String(job.id);
       }
       if (job && ["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) {
         state.watchedJobId = null;
-        await Promise.all([loadStats(), loadGateway(), loadSettings(), loadProxies()]);
+        await Promise.all([loadStats(), loadGateway(), loadRuntime(), loadSettings(), loadSources(), loadProxies(), loadGeoIP()]);
         renderJobs([job]);
         if (job.status === "completed") {
           toast(job.message || "任务已完成", "success");
@@ -1040,9 +1204,9 @@ function startPolling() {
     } catch (error) {
       toast(error.message, "error");
     }
-    state.pollTimer = setTimeout(poll, 1200);
+    state.pollTimer = setTimeout(poll, 1000);
   };
-  state.pollTimer = setTimeout(poll, 1200);
+  state.pollTimer = setTimeout(poll, 250);
 }
 
 function stopJobPolling() {
@@ -1058,9 +1222,15 @@ function startGatewayPolling() {
     state.gatewayTimer = null;
     if (document.hidden || el("appView").hidden || state.pollTimer) return;
     try {
-      await loadGateway();
+      const cycle = ++state.liveCycle;
+      const requests = [loadRuntime(), loadStats(), loadActiveJobs()];
+      if (cycle % 2 === 0) requests.push(loadGateway());
+      if (cycle % 5 === 0) requests.push(loadProxies());
+      if (cycle % 5 === 0) requests.push(loadScheduler());
+      if (cycle % 10 === 0) requests.push(loadSources());
+      const results = await Promise.all(requests);
+      const jobs = results[2] || [];
       if (!state.pollTimer) {
-        const jobs = await loadActiveJobs();
         if (jobs.length) {
           state.watchedJobId = String(jobs[0].id);
           startPolling();
@@ -1070,10 +1240,10 @@ function startGatewayPolling() {
       // Avoid repeating toast noise when the session expires or the service restarts.
     }
     if (!state.pollTimer && !document.hidden && !el("appView").hidden) {
-      state.gatewayTimer = setTimeout(poll, 4000);
+      state.gatewayTimer = setTimeout(poll, 1000);
     }
   };
-  state.gatewayTimer = setTimeout(poll, 4000);
+  state.gatewayTimer = setTimeout(poll, 1000);
 }
 
 function stopGatewayPolling() {
@@ -1091,7 +1261,7 @@ function pausePollingForHiddenPage() {
 async function resumeVisiblePolling() {
   if (el("appView").hidden) return;
   try {
-    const [jobs] = await Promise.all([loadActiveJobs(), loadStats(), loadGateway(), loadProxies()]);
+    const [jobs] = await Promise.all([loadActiveJobs(), loadStats(), loadGateway(), loadRuntime(), loadProxies()]);
     const active = jobs[0] || null;
     if (active) {
       state.watchedJobId = String(active.id);
@@ -1123,7 +1293,7 @@ async function saveSettings(event) {
         check_target_profile: checkTargets[0],
         check_target_profiles: checkTargets,
         check_limit: Number(el("settingsCheckLimit").value || 500),
-        check_concurrent: Number(el("settingsCheckConcurrent").value || 50),
+        check_concurrent: Number(el("settingsCheckConcurrent").value || 100),
         check_rounds: Number(el("settingsCheckRounds").value || 1),
         check_request_timeout: checkTimeout,
         check_hard_timeout: Math.max(checkTimeout, hardTimeout),
@@ -1156,7 +1326,9 @@ async function saveSettings(event) {
     renderSettings(payload.settings, payload.scheduler);
     state.proxies.limit = Number(payload.settings.proxy_page_size || 50);
     state.proxies.offset = 0;
-    toast("设置已保存", "success");
+    const hotUpdated = state.activeJob?.type === "check" && ["queued", "running", "cancel_requested", "cancelling"].includes(state.activeJob.status);
+    toast(hotUpdated ? "设置已保存，检测并发已热更新" : "设置已保存", "success");
+    await loadRuntime();
     await loadGateway();
     await loadProxies();
   });
@@ -1228,7 +1400,7 @@ async function deleteFailed(event) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadStats(), loadGateway(), loadGeoIP(), loadActiveJobs(), loadSettings(), loadProxies()]);
+  await Promise.all([loadStats(), loadGateway(), loadRuntime(), loadGeoIP(), loadActiveJobs(), loadSettings(), loadSources(), loadProxies()]);
 }
 
 function updateExportLinks() {

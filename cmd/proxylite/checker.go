@@ -172,11 +172,14 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	targetProfiles := targetProfilesFromPayload(payload, fallbackProfiles)
 	cfg := CheckConfig{
 		Limit:          optionalLimit(payload["limit"], 200, 100000),
-		Concurrent:     optionalLimit(payload["concurrent"], 30, 300),
+		Concurrent:     optionalLimit(payload["concurrent"], settings.CheckConcurrent, maxCheckConcurrency),
 		Rounds:         optionalLimit(payload["rounds"], 1, 5),
 		RequestTimeout: optionalLimit(payload["request_timeout"], 6, 60),
 		HardTimeout:    optionalLimit(payload["hard_timeout"], 60, 300),
 		DeleteFailed:   settings.DeleteFailedOnCheck,
+	}
+	if s.checkConcurrency != nil {
+		cfg.Concurrent = s.checkConcurrency.SetLimit(cfg.Concurrent)
 	}
 	status := optionalString(payload["status"], "untested")
 	job, ctx := s.jobs.CreateWithSpec(jobSpec{
@@ -189,6 +192,9 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 			s.coordinator.AbortReservation()
 		}
 		return nil, fmt.Errorf("创建检测任务失败")
+	}
+	if s.runtime != nil {
+		s.runtime.Add("info", fmt.Sprintf("检测任务 #%s 已启动：目标 %s，批量 %d，并发 %d", job.ID, targetProfileLabels(targetProfiles), cfg.Limit, cfg.Concurrent))
 	}
 	if s.coordinator != nil {
 		s.coordinator.Bind(job)
@@ -207,9 +213,11 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	}
 	plans := buildProxyFirstCheckPlans(targetProfiles, candidates)
 	total := totalCheckPlanItems(plans)
+	profiles := checkPlanProfiles(plans)
 	s.jobs.Update(job.ID, map[string]any{
 		"total":   total,
-		"message": fmt.Sprintf("本机检测排队：%d 个代理 / %d 项目标检测", len(plans), total),
+		"message": fmt.Sprintf("本机检测排队：%d 个代理 / %d 项目标检测，目标 %s，并发 %d", len(plans), total, targetProfileLabels(profiles), cfg.Concurrent),
+		"result":  initialCheckProgress(plans, profiles, cfg.Concurrent),
 	})
 	go s.runCheckJob(ctx, job.ID, plans, cfg)
 	return map[string]any{"job_id": job.ID, "count": total, "proxy_count": len(plans), "target_profiles": targetProfiles}, nil
@@ -227,6 +235,7 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 		return
 	}
 	done := 0
+	proxyDone := 0
 	available := 0
 	failed := 0
 	checkFailed := 0
@@ -234,11 +243,13 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 	persistenceFailed := 0
 	deletedFailed := 0
 	outcomes := buildProxyCheckOutcomes(plans)
+	profiles := checkPlanProfiles(plans)
+	targetProgress := newTargetCheckProgress(plans, profiles)
 	geoCache := newCheckGeoCache()
 	if s.geoEnricher != nil {
 		geoCache = newCheckGeoCacheWithLookup(s.geoEnricher.LookupAndQueue)
 	}
-	for bundle := range checkBatchStream(ctx, plans, cfg, geoCache) {
+	for bundle := range checkBatchStream(ctx, plans, cfg, geoCache, s.checkConcurrency) {
 		if len(bundle.Results) == 0 {
 			continue
 		}
@@ -248,13 +259,14 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 			outcomes[bundle.ProxyID] = outcome
 		}
 		for _, result := range bundle.Results {
+			updateTargetCheckProgress(targetProgress, result)
 			outcome.Seen++
 			outcome.BaseReachable = outcome.BaseReachable || result.BaseReachable
 			if result.Status == "available" {
 				outcome.AllFailed = false
 			}
 		}
-		previousDone := done
+		proxyDone++
 		done += len(bundle.Results)
 		persistenceCtx := ctx
 		cancelPersistence := func() {}
@@ -287,16 +299,14 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 				deletedFailed++
 			}
 		}
-		if done == len(bundle.Results) || done/10 != previousDone/10 || done == total {
-			lastProfile := bundle.Results[len(bundle.Results)-1].TargetProfile
-			s.jobs.Update(jobID, map[string]any{
-				"done":    done,
-				"total":   total,
-				"success": available,
-				"failed":  failed,
-				"message": checkProgressMessage(done, total, lastProfile, available, failed, deletedFailed, cfg.DeleteFailed),
-			})
-		}
+		s.jobs.Update(jobID, map[string]any{
+			"done":    done,
+			"total":   total,
+			"success": available,
+			"failed":  failed,
+			"message": checkProgressMessage(proxyDone, len(plans), done, total, profiles, targetProgress, s.checkConcurrency, cfg.Concurrent),
+			"result":  checkProgressResult(proxyDone, len(plans), done, total, profiles, targetProgress, s.checkConcurrency, cfg.Concurrent),
+		})
 	}
 	result := map[string]any{
 		"checked":            done,
@@ -306,7 +316,12 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 		"persisted":          persisted,
 		"persistence_failed": persistenceFailed,
 		"deleted_failed":     deletedFailed,
-		"target_profiles":    checkPlanProfiles(plans),
+		"target_profiles":    profiles,
+		"proxy_done":         proxyDone,
+		"proxy_total":        len(plans),
+		"target_progress":    targetProgress,
+		"execution_mode":     "proxy_parallel_target_ordered",
+		"check_concurrency":  concurrencyStatus(s.checkConcurrency, cfg.Concurrent),
 	}
 	s.jobs.Update(jobID, map[string]any{"done": done, "total": total, "success": available, "failed": failed, "result": result})
 	if ctx.Err() != nil {
@@ -346,12 +361,89 @@ func shouldDeleteFailedProxy(outcome *proxyCheckOutcome) bool {
 	return outcome != nil && outcome.Seen == outcome.Expected && outcome.AllFailed && !outcome.BaseReachable && outcome.Persisted
 }
 
-func checkProgressMessage(done int, total int, targetProfile string, available int, failed int, deletedFailed int, deleteFailed bool) string {
-	targetText := targetProfileLabel(targetProfile)
-	if deleteFailed {
-		return fmt.Sprintf("本机检测进行中：%d/%d，目标 %s，可用 %d，失败删除 %d", done, total, targetText, available, deletedFailed)
+func checkProgressMessage(proxyDone int, proxyTotal int, done int, total int, profiles []string, progress map[string]map[string]int, limiter *checkConcurrencyController, fallbackConcurrency int) string {
+	status := concurrencyStatus(limiter, fallbackConcurrency)
+	return fmt.Sprintf(
+		"本机检测进行中：代理 %d/%d，目标项 %d/%d，%s，并发 %d/%d",
+		proxyDone, proxyTotal, done, total, targetProgressText(profiles, progress),
+		anyToInt(status["active"]), anyToInt(status["limit"]),
+	)
+}
+
+func initialCheckProgress(plans []checkPlan, profiles []string, concurrency int) map[string]any {
+	progress := newTargetCheckProgress(plans, profiles)
+	return checkProgressResult(0, len(plans), 0, totalCheckPlanItems(plans), profiles, progress, nil, concurrency)
+}
+
+func checkProgressResult(proxyDone int, proxyTotal int, done int, total int, profiles []string, progress map[string]map[string]int, limiter *checkConcurrencyController, fallbackConcurrency int) map[string]any {
+	return map[string]any{
+		"checked":           done,
+		"proxy_done":        proxyDone,
+		"proxy_total":       proxyTotal,
+		"target_item_done":  done,
+		"target_item_total": total,
+		"target_profiles":   append([]string(nil), profiles...),
+		"target_progress":   progress,
+		"execution_mode":    "proxy_parallel_target_ordered",
+		"check_concurrency": concurrencyStatus(limiter, fallbackConcurrency),
 	}
-	return fmt.Sprintf("本机检测进行中：%d/%d，目标 %s，可用 %d，失败 %d", done, total, targetText, available, failed)
+}
+
+func newTargetCheckProgress(plans []checkPlan, profiles []string) map[string]map[string]int {
+	progress := make(map[string]map[string]int, len(profiles))
+	for _, profile := range profiles {
+		progress[profile] = map[string]int{"done": 0, "total": 0, "available": 0, "failed": 0}
+	}
+	for _, plan := range plans {
+		for _, profile := range plan.TargetProfiles {
+			if progress[profile] == nil {
+				progress[profile] = map[string]int{"done": 0, "total": 0, "available": 0, "failed": 0}
+			}
+			progress[profile]["total"]++
+		}
+	}
+	return progress
+}
+
+func updateTargetCheckProgress(progress map[string]map[string]int, result CheckResult) {
+	profile := normalizeTargetProfile(result.TargetProfile)
+	if progress[profile] == nil {
+		progress[profile] = map[string]int{"done": 0, "total": 0, "available": 0, "failed": 0}
+	}
+	progress[profile]["done"]++
+	if result.Status == "available" {
+		progress[profile]["available"]++
+	} else {
+		progress[profile]["failed"]++
+	}
+}
+
+func targetProgressText(profiles []string, progress map[string]map[string]int) string {
+	parts := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		item := progress[profile]
+		parts = append(parts, fmt.Sprintf("%s %d/%d", targetProfileLabel(profile), item["done"], item["total"]))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func targetProfileLabels(profiles []string) string {
+	labels := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		labels = append(labels, targetProfileLabel(profile))
+	}
+	return strings.Join(labels, "、")
+}
+
+func concurrencyStatus(limiter *checkConcurrencyController, fallback int) map[string]any {
+	if limiter != nil {
+		return limiter.Status()
+	}
+	return map[string]any{
+		"limit":   clampInt(fallback, 1, maxCheckConcurrency),
+		"active":  0,
+		"maximum": maxCheckConcurrency,
+	}
 }
 
 func checkCompleteMessage(available int, failed int, deletedFailed int, deleteFailed bool) string {
@@ -475,8 +567,15 @@ func buildProxyFirstCheckPlans(profiles []string, candidates map[string][]ProxyT
 	return plans
 }
 
-func checkBatchStream(ctx context.Context, plans []checkPlan, cfg CheckConfig, geoCache *checkGeoCache) <-chan checkBundle {
+func checkBatchStream(ctx context.Context, plans []checkPlan, cfg CheckConfig, geoCache *checkGeoCache, limiters ...*checkConcurrencyController) <-chan checkBundle {
 	workers := minInt(maxInt(1, cfg.Concurrent), len(plans))
+	var limiter *checkConcurrencyController
+	if len(limiters) > 0 {
+		limiter = limiters[0]
+	}
+	if limiter != nil {
+		workers = minInt(maxCheckConcurrency, len(plans))
+	}
 	results := make(chan checkBundle, maxInt(1, workers))
 	jobs := make(chan checkPlan)
 	if workers == 0 {
@@ -496,7 +595,16 @@ func checkBatchStream(ctx context.Context, plans []checkPlan, cfg CheckConfig, g
 					if !ok {
 						return
 					}
-					results <- checkProxyPlan(ctx, plan, cfg, geoCache)
+					if !limiter.Acquire(ctx) {
+						return
+					}
+					bundle := checkProxyPlan(ctx, plan, cfg, geoCache)
+					limiter.Release()
+					select {
+					case results <- bundle:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}()
@@ -607,29 +715,12 @@ func probeBaseWithClient(ctx context.Context, client *http.Client) (*string, *in
 func probeTargetsWithClient(ctx context.Context, client *http.Client, profiles []string) map[string]targetProbeResult {
 	profiles = normalizeTargetProfiles(profiles)
 	results := make([]targetProbeResult, len(profiles))
-	jobs := make(chan int)
-	workers := minInt(3, len(profiles))
-	var wg sync.WaitGroup
-	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for index := range jobs {
-				results[index] = probeTargetWithClient(ctx, client, targetProfiles[profiles[index]])
-			}
-		}()
-	}
-	for index := range profiles {
-		select {
-		case jobs <- index:
-		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			return targetProbeMap(profiles, results)
+	for index, profile := range profiles {
+		if ctx.Err() != nil {
+			break
 		}
+		results[index] = probeTargetWithClient(ctx, client, targetProfiles[profile])
 	}
-	close(jobs)
-	wg.Wait()
 	return targetProbeMap(profiles, results)
 }
 

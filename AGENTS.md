@@ -38,8 +38,10 @@ The current canonical sequence is:
   proxy-first checking, cached GeoIP enrichment, aggregate stats, lock-free
   gateway refresh, frontend polling reduction, one-command Linux deployment,
   and comprehensive responsive light/dark Web UI redesign
-- current implementation stage: none; follow `docs/PROJECT_HANDOFF.md` and wait
-  for an explicit user-defined next route
+- current implementation stage: `v0.4.5`; follow `docs/ROADMAP_V0.4.5.md`
+  for navigation/layout refinement, bounded runtime logs, second-level live data,
+  multi-target progress, and hot-adjustable total check concurrency from 1 to
+  300 with a default of 100
 - no later version may start implicitly; every stage must still complete the
   existing 8899 acceptance, commit, push, annotated tag, GitHub Release, assets,
   CI, and GHCR workflow

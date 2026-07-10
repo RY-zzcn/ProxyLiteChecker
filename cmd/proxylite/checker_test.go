@@ -111,6 +111,32 @@ func TestBuildProxyFirstCheckPlansMergesCandidatesByProxy(t *testing.T) {
 	}
 }
 
+func TestMultiTargetProgressReportsEverySelectedTarget(t *testing.T) {
+	plans := []checkPlan{
+		{Item: ProxyTask{ID: 1}, TargetProfiles: []string{"openai", "grok"}},
+		{Item: ProxyTask{ID: 2}, TargetProfiles: []string{"openai"}},
+	}
+	profiles := []string{"openai", "grok"}
+	progress := newTargetCheckProgress(plans, profiles)
+	updateTargetCheckProgress(progress, CheckResult{TargetProfile: "openai", Status: "available"})
+	updateTargetCheckProgress(progress, CheckResult{TargetProfile: "grok", Status: "failed"})
+	limiter := newCheckConcurrencyController(100)
+	if !limiter.Acquire(context.Background()) {
+		t.Fatal("acquire concurrency slot")
+	}
+	message := checkProgressMessage(1, 2, 2, 3, profiles, progress, limiter, 100)
+	limiter.Release()
+	for _, expected := range []string{"代理 1/2", "目标项 2/3", "OpenAI 1/2", "Grok 1/1", "并发 1/100"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("message %q does not contain %q", message, expected)
+		}
+	}
+	result := checkProgressResult(1, 2, 2, 3, profiles, progress, limiter, 100)
+	if result["execution_mode"] != "proxy_parallel_target_ordered" || anyToInt(result["proxy_total"]) != 2 {
+		t.Fatalf("unexpected progress result: %#v", result)
+	}
+}
+
 func TestProxyFirstCheckRunsBaseProbeOncePerRound(t *testing.T) {
 	originalClientFactory := checkProxyHTTPClient
 	originalExitTargets := checkExitIPTargets
@@ -205,7 +231,7 @@ func TestExitIPTargetsAreFallbacksAndStopAfterSuccess(t *testing.T) {
 	}
 }
 
-func TestTargetProbeConcurrencyIsBounded(t *testing.T) {
+func TestTargetsWithinOneProxyRunSequentially(t *testing.T) {
 	originalProfiles := targetProfiles
 	t.Cleanup(func() { targetProfiles = originalProfiles })
 	targetProfiles = map[string]TargetProfile{}
@@ -231,7 +257,7 @@ func TestTargetProbeConcurrencyIsBounded(t *testing.T) {
 	if len(results) != len(profiles) {
 		t.Fatalf("expected all target results, got %#v", results)
 	}
-	if got := maximum.Load(); got > 3 {
-		t.Fatalf("target concurrency exceeded bound: %d", got)
+	if got := maximum.Load(); got != 1 {
+		t.Fatalf("expected one in-flight target request per proxy, got %d", got)
 	}
 }

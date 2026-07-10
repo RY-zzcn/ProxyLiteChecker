@@ -5,6 +5,18 @@ import (
 	"time"
 )
 
+func TestCheckConcurrencyDefaultsToOneHundredAndClampsAtThreeHundred(t *testing.T) {
+	settings := defaultAppSettings()
+	if settings.CheckConcurrent != defaultCheckConcurrency {
+		t.Fatalf("default concurrency=%d want %d", settings.CheckConcurrent, defaultCheckConcurrency)
+	}
+	settings.CheckConcurrent = 999
+	settings = normalizeAppSettings(settings)
+	if settings.CheckConcurrent != maxCheckConcurrency {
+		t.Fatalf("clamped concurrency=%d want %d", settings.CheckConcurrent, maxCheckConcurrency)
+	}
+}
+
 func newSchedulerTestServer(t *testing.T) (*server, *scheduler) {
 	t.Helper()
 	st, err := openStore(":memory:")

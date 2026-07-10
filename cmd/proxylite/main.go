@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	appVersion           = "0.4.4"
+	appVersion           = "0.4.5"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -60,14 +60,16 @@ type config struct {
 }
 
 type server struct {
-	cfg         config
-	mux         *http.ServeMux
-	store       *store
-	jobs        *jobManager
-	coordinator *workCoordinator
-	gateway     *gatewayServer
-	scheduler   *scheduler
-	geoEnricher *geoEnricher
+	cfg              config
+	mux              *http.ServeMux
+	store            *store
+	jobs             *jobManager
+	coordinator      *workCoordinator
+	gateway          *gatewayServer
+	scheduler        *scheduler
+	geoEnricher      *geoEnricher
+	runtime          *runtimeMonitor
+	checkConcurrency *checkConcurrencyController
 }
 
 type loginRequest struct {
@@ -76,6 +78,7 @@ type loginRequest struct {
 }
 
 func main() {
+	applicationRuntime.AttachLogger()
 	cfg := loadConfig()
 	startGeoIPServices()
 	srv := newServer(cfg)
@@ -228,13 +231,32 @@ func newServer(cfg config) *server {
 	if err := st.EnsureSettingsSchema(); err != nil {
 		log.Fatalf("ensure settings schema failed: %v", err)
 	}
-	srv := &server{cfg: cfg, mux: http.NewServeMux(), store: st}
+	settings, err := st.AppSettings()
+	if err != nil {
+		log.Fatalf("load runtime settings failed: %v", err)
+	}
+	srv := &server{
+		cfg:              cfg,
+		mux:              http.NewServeMux(),
+		store:            st,
+		runtime:          applicationRuntime,
+		checkConcurrency: newCheckConcurrencyController(settings.CheckConcurrent),
+	}
 	srv.geoEnricher = newGeoEnricher(st)
 	srv.geoEnricher.Start()
 	srv.jobs = newJobManager(st)
 	srv.coordinator = newWorkCoordinator(st)
 	srv.scheduler = newScheduler(srv)
 	srv.jobs.SetTerminalCallback(func(job *jobState) {
+		if srv.runtime != nil {
+			level := "info"
+			if job.Status == jobStatusFailed || job.Status == jobStatusInterrupted {
+				level = "error"
+			} else if job.Status == jobStatusPartial || job.Status == jobStatusCancelled {
+				level = "warning"
+			}
+			srv.runtime.Add(level, fmt.Sprintf("任务 #%s %s：%s", job.ID, runtimeJobStatusLabel(job.Status), firstNonEmpty(job.Message, job.Error)))
+		}
 		srv.coordinator.Release(job)
 		srv.scheduler.OnJobTerminal(job)
 	})
@@ -250,6 +272,7 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /api/settings", s.withAuth(s.handleGetSettings))
 	s.mux.HandleFunc("POST /api/settings", s.withAuth(s.handleSaveSettings))
 	s.mux.HandleFunc("GET /api/stats", s.withAuth(s.handleStats))
+	s.mux.HandleFunc("GET /api/runtime", s.withAuth(s.handleRuntime))
 	s.mux.HandleFunc("GET /api/sources", s.withAuth(s.handleSources))
 	s.mux.HandleFunc("GET /api/target-profiles", s.withAuth(s.handleTargetProfiles))
 	s.mux.HandleFunc("POST /api/sources/fetch-job", s.withAuth(s.handleFetchSourcesJob))
@@ -398,11 +421,29 @@ func (s *server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.applyGatewaySettings(settings)
+	if s.checkConcurrency != nil {
+		s.checkConcurrency.SetLimit(settings.CheckConcurrent)
+	}
+	if s.runtime != nil && current.CheckConcurrent != settings.CheckConcurrent {
+		s.runtime.Add("info", fmt.Sprintf("检测总并发已热更新：%d -> %d", current.CheckConcurrent, settings.CheckConcurrent))
+	}
 	s.scheduler.ApplySettings(current, settings)
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"settings":  settings,
 		"scheduler": s.scheduler.Status(settings),
 	})
+}
+
+func (s *server) handleRuntime(w http.ResponseWriter, _ *http.Request) {
+	monitor := s.runtime
+	if monitor == nil {
+		monitor = applicationRuntime
+	}
+	concurrency := map[string]any{"limit": defaultCheckConcurrency, "active": 0, "maximum": maxCheckConcurrency}
+	if s.checkConcurrency != nil {
+		concurrency = s.checkConcurrency.Status()
+	}
+	jsonResponse(w, http.StatusOK, monitor.Payload(concurrency))
 }
 
 func (s *server) handleStats(w http.ResponseWriter, _ *http.Request) {

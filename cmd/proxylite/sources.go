@@ -111,6 +111,9 @@ func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, e
 		}
 		return nil, fmt.Errorf("创建拉取任务失败")
 	}
+	if s.runtime != nil {
+		s.runtime.Add("info", fmt.Sprintf("拉取任务 #%s 已启动：选择 %d 个代理源，单源上限 %d", job.ID, len(selectedSources(sourceIDs)), limitPerSource))
+	}
 	if s.coordinator != nil {
 		s.coordinator.Bind(job)
 	}

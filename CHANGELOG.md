@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.4.5 - 2026-07-11
+
+- Replace the floating top section pill with an adaptive navigation model: a restrained sticky side rail on desktop and an in-flow compact horizontal navigator on smaller screens.
+- Convert the four automation groups into an exclusive native accordion so one focused configuration area is open at a time without uneven multi-card heights or large empty regions.
+- Add a bounded in-memory runtime log with the latest 30 entries, service start time, live uptime, and current/maximum check concurrency through the authenticated runtime API and Web console.
+- Refresh active jobs, aggregate stats, runtime information, proxy rows, gateway state, scheduler state, and source health on workload-aware second-level intervals while pausing high-frequency requests in hidden tabs.
+- Report multi-target checks with separate proxy and target-item totals, every selected target's progress, execution order, and live concurrency instead of showing only the last completed target.
+- Change the default check concurrency to 100, retain the configurable 1–300 range, and hot-apply saved concurrency changes to running checks without terminating already-started proxy work.
+- Run targets sequentially within one proxy while checking different proxies in parallel, ensuring the configured total concurrency represents the real number of simultaneous proxy detection chains.
+
 ## 0.4.4 - 2026-07-10
 
 - Redesign the native Web console around a semantic light/dark design system with clearer hierarchy, softer operational surfaces, consistent status colors, and persistent theme selection.

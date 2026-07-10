@@ -121,7 +121,7 @@ func defaultAppSettings() appSettings {
 		CheckTargetProfile:       "generic",
 		CheckTargetProfiles:      []string{"generic"},
 		CheckLimit:               500,
-		CheckConcurrent:          50,
+		CheckConcurrent:          defaultCheckConcurrency,
 		CheckRounds:              1,
 		CheckRequestTimeout:      6,
 		CheckHardTimeout:         60,
@@ -420,7 +420,7 @@ func normalizeAppSettings(settings appSettings) appSettings {
 	settings.CheckTargetProfiles = normalizeTargetProfiles(checkProfiles)
 	settings.CheckTargetProfile = settings.CheckTargetProfiles[0]
 	settings.CheckLimit = clampInt(settings.CheckLimit, 1, 100000)
-	settings.CheckConcurrent = clampInt(settings.CheckConcurrent, 1, 300)
+	settings.CheckConcurrent = clampInt(settings.CheckConcurrent, 1, maxCheckConcurrency)
 	settings.CheckRounds = clampInt(settings.CheckRounds, 1, 5)
 	settings.CheckRequestTimeout = clampInt(settings.CheckRequestTimeout, 2, 60)
 	settings.CheckHardTimeout = clampInt(settings.CheckHardTimeout, settings.CheckRequestTimeout, 300)
