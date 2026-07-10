@@ -27,10 +27,11 @@ When the user says to continue ProxyLiteChecker development, resume the roadmap,
 or asks for the next version, read these files before changing code:
 
 1. `docs/PROJECT_HANDOFF.md`
-2. `docs/ROADMAP_V0.4.4.md`
-3. `docs/ROADMAP_V0.4.3.md`
-4. `docs/ROADMAP_V0.4.0_TO_V0.4.2.md`
-5. `CHANGELOG.md`
+2. `docs/ROADMAP_V0.4.5.md`
+3. `docs/ROADMAP_V0.4.4.md`
+4. `docs/ROADMAP_V0.4.3.md`
+5. `docs/ROADMAP_V0.4.0_TO_V0.4.2.md`
+6. `CHANGELOG.md`
 
 The current canonical sequence is:
 
@@ -38,10 +39,11 @@ The current canonical sequence is:
   proxy-first checking, cached GeoIP enrichment, aggregate stats, lock-free
   gateway refresh, frontend polling reduction, one-command Linux deployment,
   and comprehensive responsive light/dark Web UI redesign
-- current implementation stage: `v0.4.5`; follow `docs/ROADMAP_V0.4.5.md`
-  for navigation/layout refinement, bounded runtime logs, second-level live data,
-  multi-target progress, and hot-adjustable total check concurrency from 1 to
-  300 with a default of 100
+- released: `v0.4.5`, adding exact adaptive navigation, bounded Chinese runtime
+  logs, second-level live data, multi-target progress, and hot-adjustable total
+  check concurrency from 1 to 300 with a default of 100
+- current implementation stage: none; follow `docs/PROJECT_HANDOFF.md` and wait
+  for an explicit user-defined next route
 - no later version may start implicitly; every stage must still complete the
   existing 8899 acceptance, commit, push, annotated tag, GitHub Release, assets,
   CI, and GHCR workflow

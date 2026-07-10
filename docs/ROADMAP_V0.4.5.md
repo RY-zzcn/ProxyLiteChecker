@@ -1,7 +1,7 @@
 # ProxyLiteChecker v0.4.5 实时控制台与任务可观测性路线图
 
-- 状态：实现与验证完成，等待 GitHub 发布闭环
-- 当前工作包：`V045-GITHUB-RELEASE`
+- 状态：已完成并发布
+- 当前工作包：`COMPLETE`
 - 基线版本：`v0.4.4`
 - 目标版本：`v0.4.5`
 - 主题：重构导航与自动化布局，补齐秒级数据刷新、运行日志、运行时间和多目标任务进度
@@ -49,7 +49,7 @@
 - [x] Node 语法、HTML ID/绑定、Go test/vet/race、preflight、交叉编译和差异检查通过。
 - [x] 375/390/768/1024/1440 深浅主题、侧边/移动导航、四设置区、日志和实时任务浏览器验收通过。
 - [x] 更新并重启现有 8899，验证 health、登录/bootstrap、runtime API、任务秒级进度、统计/仓库更新和并发上限。
-- [ ] 更新 CHANGELOG/README/接手文档，提交、推送、annotated `v0.4.5` tag、GitHub Release、资产、CI 和 GHCR。
+- [x] 更新 CHANGELOG/README/接手文档，提交、推送、annotated `v0.4.5` tag、GitHub Release、资产、CI 和 GHCR。
 
 ## 4. 实时断点
 
@@ -118,3 +118,16 @@
 
 - 响应式补验：1024px、768px 与 390px 横向溢出均为 0；1024 使用页面内导航且单开 1 个设置，768/390 按移动策略初始折叠设置；1440 六项精确导航与日志滚轮链路通过。
 - README 已补充默认 100/可调 1–300 热并发、秒级数据、逐目标进度、30 条简体中文日志和 `/api/runtime`。
+
+- 发布提交 `8dd89d3` 已创建并推送到 GitHub main。
+- 正在执行或准备执行的命令：创建指向 `8dd89d3` 的 annotated `v0.4.5` tag 并推送，随后监控 CI、Release 和 Docker 工作流。
+- 当前阻塞：无。
+- 唯一下一步：推送 `v0.4.5` tag 触发正式发布。
+
+- annotated `v0.4.5` tag 已指向 `8dd89d3f50c53cff436070be993579a5b5e12308` 并推送。
+- GitHub Actions：CI `29113784759`、Release `29113858797`、main Docker `29113784853`、tag Docker `29113858824` 全部成功。
+- Release：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.5>，8 个资产全部 uploaded。
+- GHCR：`ghcr.io/ry-zzcn/proxylitechecker:v0.4.5`，摘要 `sha256:11f6548c35a9f43fa4440beb35fc6ea450daaf124be2040b25fcc95e3ac68719`，包含 `linux/amd64` 与 `linux/arm64`。
+- 当前工作包：`COMPLETE`。
+- 当前阻塞：无。
+- 唯一下一步：提交并推送发布后完成记录；之后等待用户制定下一路线。
