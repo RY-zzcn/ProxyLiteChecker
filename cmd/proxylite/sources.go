@@ -69,10 +69,6 @@ func sourceMap() map[string]sourceOption {
 }
 
 func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, error) {
-	job, ctx, running := s.jobs.CreateIfNoRunning("fetch", "准备拉取代理源", "fetch", "check")
-	if running != nil {
-		return nil, runningJobConflict(running)
-	}
 	sourceIDs := anyToStringSlice(payload["source_ids"])
 	limitPerSource := anyToInt(payload["limit_per_source"])
 	scheduled := strings.EqualFold(optionalString(payload["scheduled_trigger"], ""), "auto")
@@ -81,6 +77,45 @@ func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, e
 	}
 	if limitPerSource > 50000 {
 		limitPerSource = 50000
+	}
+	trigger := optionalString(payload["trigger"], "manual")
+	if scheduled && trigger == "manual" {
+		trigger = "periodic"
+	}
+	reason := optionalString(payload["trigger_reason"], trigger)
+	taskKey := optionalString(payload["task_key"], "")
+	intent := automaticIntent{Key: firstNonEmpty(taskKey, "fetch."+trigger), JobType: "fetch", Reason: reason, TaskKey: taskKey, Payload: cloneMap(payload)}
+	if s.coordinator != nil {
+		acquired, running := s.coordinator.TryAcquire("fetch", scheduled, intent)
+		if !acquired {
+			if scheduled {
+				return nil, errJobDeferred
+			}
+			if running == nil {
+				running = s.jobs.RunningOfTypes("fetch", "check")
+			}
+			if running == nil {
+				return nil, jobConflict("heavy")
+			}
+			return nil, runningJobConflict(running)
+		}
+	}
+	job, ctx := s.jobs.CreateWithSpec(jobSpec{
+		Type: "fetch", Trigger: trigger, TriggerReason: reason, TaskKey: taskKey,
+		ParentJobID: optionalString(payload["parent_job_id"], ""), Message: "准备拉取代理源",
+		Params: map[string]any{"source_ids": sourceIDs, "limit_per_source": limitPerSource, "pipeline_targets": anyToStringSlice(payload["pipeline_targets"])},
+	})
+	if job == nil {
+		if s.coordinator != nil {
+			s.coordinator.AbortReservation()
+		}
+		return nil, fmt.Errorf("创建拉取任务失败")
+	}
+	if s.coordinator != nil {
+		s.coordinator.Bind(job)
+	}
+	if s.scheduler != nil {
+		s.scheduler.MarkStarted(job)
 	}
 	go s.runFetchSourcesJob(ctx, job.ID, sourceIDs, limitPerSource, scheduled)
 	return map[string]any{"job_id": job.ID}, nil

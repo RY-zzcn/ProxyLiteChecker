@@ -29,13 +29,14 @@ func TestGatewaySelectUpstreamRoundRobinByTarget(t *testing.T) {
 			latency = 10
 		}
 		if err := st.SaveCheckResult(CheckResult{
-			ProxyID:        item.ID,
-			Status:         "available",
-			Grade:          "A",
-			LatencyMS:      &latency,
-			SuccessRate:    1,
-			TargetProfile:  "openai",
-			RecommendedUse: "openai",
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			LatencyMS:        &latency,
+			SuccessRate:      1,
+			TargetProfile:    "openai",
+			ServiceReachable: true,
+			RecommendedUse:   "openai",
 		}); err != nil {
 			t.Fatalf("save check result: %v", err)
 		}
@@ -87,13 +88,14 @@ func TestGatewaySelectUpstreamUsesLoadedPoolUntilRefresh(t *testing.T) {
 			latency = 10
 		}
 		if err := st.SaveCheckResult(CheckResult{
-			ProxyID:        item.ID,
-			Status:         "available",
-			Grade:          "A",
-			LatencyMS:      &latency,
-			SuccessRate:    1,
-			TargetProfile:  "openai",
-			RecommendedUse: "openai",
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			LatencyMS:        &latency,
+			SuccessRate:      1,
+			TargetProfile:    "openai",
+			ServiceReachable: true,
+			RecommendedUse:   "openai",
 		}); err != nil {
 			t.Fatalf("save check result: %v", err)
 		}
@@ -128,13 +130,14 @@ func TestGatewaySelectUpstreamUsesLoadedPoolUntilRefresh(t *testing.T) {
 		foundThird = true
 		latency := 5
 		if err := st.SaveCheckResult(CheckResult{
-			ProxyID:        item.ID,
-			Status:         "available",
-			Grade:          "A",
-			LatencyMS:      &latency,
-			SuccessRate:    1,
-			TargetProfile:  "openai",
-			RecommendedUse: "openai",
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			LatencyMS:        &latency,
+			SuccessRate:      1,
+			TargetProfile:    "openai",
+			ServiceReachable: true,
+			RecommendedUse:   "openai",
 		}); err != nil {
 			t.Fatalf("save third check result: %v", err)
 		}
@@ -350,12 +353,13 @@ func TestGatewayStatusReportsLoadedAndAvailableUpstreams(t *testing.T) {
 	}
 	for _, item := range items {
 		if err := st.SaveCheckResult(CheckResult{
-			ProxyID:        item.ID,
-			Status:         "available",
-			Grade:          "A",
-			SuccessRate:    1,
-			TargetProfile:  "openai",
-			RecommendedUse: "openai",
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			SuccessRate:      1,
+			TargetProfile:    "openai",
+			ServiceReachable: true,
+			RecommendedUse:   "openai",
 		}); err != nil {
 			t.Fatalf("save check result: %v", err)
 		}
@@ -399,13 +403,14 @@ func TestGatewaySelectorFiltersUpstreamsByCountry(t *testing.T) {
 			country = "JP"
 		}
 		if err := st.SaveCheckResult(CheckResult{
-			ProxyID:        item.ID,
-			Status:         "available",
-			Grade:          "A",
-			Country:        stringPtr(country),
-			SuccessRate:    1,
-			TargetProfile:  "openai",
-			RecommendedUse: "openai",
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			Country:          stringPtr(country),
+			SuccessRate:      1,
+			TargetProfile:    "openai",
+			ServiceReachable: true,
+			RecommendedUse:   "openai",
 		}); err != nil {
 			t.Fatalf("save check result: %v", err)
 		}
@@ -449,12 +454,13 @@ func TestGatewayStatusReportsUniqueAvailableAcrossTargets(t *testing.T) {
 	for _, item := range items {
 		for _, profile := range []string{"openai", "grok"} {
 			if err := st.SaveCheckResult(CheckResult{
-				ProxyID:        item.ID,
-				Status:         "available",
-				Grade:          "A",
-				SuccessRate:    1,
-				TargetProfile:  profile,
-				RecommendedUse: profile,
+				ProxyID:          item.ID,
+				Status:           "available",
+				Grade:            "A",
+				SuccessRate:      1,
+				TargetProfile:    profile,
+				ServiceReachable: true,
+				RecommendedUse:   profile,
 			}); err != nil {
 				t.Fatalf("save %s result: %v", profile, err)
 			}

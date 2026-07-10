@@ -21,6 +21,62 @@ write, move, delete, or reformat files in that older project while working here.
 - `scripts`: local development and validation helpers.
 - `data`: runtime SQLite data, ignored by git.
 
+## Codex Resume Protocol
+
+When the user says to continue ProxyLiteChecker development, resume the roadmap,
+or asks for the next version, read these files before changing code:
+
+1. `docs/PROJECT_HANDOFF.md`
+2. `docs/ROADMAP_V0.4.0_TO_V0.4.2.md`
+3. `CHANGELOG.md`
+
+The current canonical sequence is:
+
+- released: `v0.3.4`
+- code complete, mandatory publication in progress: cumulative `v0.4.1`
+  containing the v0.4.0 state model and v0.4.1 persistent jobs/scheduler
+- next only after local 8899 acceptance and v0.4.1 GitHub release: `v0.4.2`
+  proxy-first checking and performance
+
+Code, tests, CHANGELOG, release tags, the handoff document, and then the current
+roadmap are the truth order. Superseded design and progress documents have been
+removed so there is only one active roadmap.
+
+Before implementation, inspect `git status --short --branch`, confirm the real
+version, and run the relevant baseline tests. Work on the first unfinished
+roadmap version only.
+
+## Mandatory Development And Release Workflow
+
+These requirements are standing project instructions and are not optional:
+
+1. Record progress continuously, not only at the end of a session. After every
+   material work package, migration, risky refactor, or validation checkpoint,
+   immediately update `docs/PROJECT_HANDOFF.md` and the active roadmap with the
+   current work package, completed changes, tests already run, current blocker,
+   and exactly one next executable action. Before starting a long-running test
+   or release operation, record the intended command so an interrupted session
+   has a precise resume point.
+2. Every completed development stage must be committed and pushed to GitHub,
+   then published as a new version. Completion includes the version bump,
+   CHANGELOG, commit, push, annotated tag, GitHub Release, release assets, and
+   GHCR tags when the release workflow provides them. A stage must not be marked
+   complete while any of these required publication steps is pending. If GitHub
+   credentials, network access, CI, or release assets block publication, record
+   the exact blocker and leave the stage marked blocked/in progress.
+3. The only integration deployment is the existing local service at
+   `http://127.0.0.1:8899`. After each development stage, back up data when a
+   migration is involved, rebuild/update that deployment, restart it, and test
+   health, login/bootstrap, the changed APIs, and the necessary Web/gateway
+   flows on port 8899. Do not deploy a second temporary ProxyLiteChecker service
+   or use an alternate application port. Unit tests and migration checks may
+   still use in-memory databases or backup copies; this restriction applies to
+   the running integration deployment.
+
+At the end of every implementation session, update the handoff status, roadmap
+checkboxes, migrations, tests run, local 8899 deployment result, GitHub release
+status, remaining risk, and the single next executable task.
+
 ## Common Commands
 
 ```bash

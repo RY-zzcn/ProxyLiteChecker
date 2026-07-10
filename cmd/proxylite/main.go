@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	appVersion           = "0.3.4"
+	appVersion           = "0.4.1"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -60,12 +60,13 @@ type config struct {
 }
 
 type server struct {
-	cfg       config
-	mux       *http.ServeMux
-	store     *store
-	jobs      *jobManager
-	gateway   *gatewayServer
-	scheduler *scheduler
+	cfg         config
+	mux         *http.ServeMux
+	store       *store
+	jobs        *jobManager
+	coordinator *workCoordinator
+	gateway     *gatewayServer
+	scheduler   *scheduler
 }
 
 type loginRequest struct {
@@ -226,13 +227,14 @@ func newServer(cfg config) *server {
 	if err := st.EnsureSettingsSchema(); err != nil {
 		log.Fatalf("ensure settings schema failed: %v", err)
 	}
-	srv := &server{
-		cfg:   cfg,
-		mux:   http.NewServeMux(),
-		store: st,
-		jobs:  newJobManager(),
-	}
+	srv := &server{cfg: cfg, mux: http.NewServeMux(), store: st}
+	srv.jobs = newJobManager(st)
+	srv.coordinator = newWorkCoordinator(st)
 	srv.scheduler = newScheduler(srv)
+	srv.jobs.SetTerminalCallback(func(job *jobState) {
+		srv.coordinator.Release(job)
+		srv.scheduler.OnJobTerminal(job)
+	})
 	srv.routes()
 	srv.scheduler.Start()
 	return srv
@@ -255,8 +257,10 @@ func (s *server) routes() {
 	s.mux.HandleFunc("POST /api/geoip/update", s.withAuth(s.handleGeoIPUpdate))
 	s.mux.HandleFunc("POST /api/checks/run-job", s.withAuth(s.handleRunCheckJob))
 	s.mux.HandleFunc("GET /api/jobs/active", s.withAuth(s.handleActiveJobs))
+	s.mux.HandleFunc("GET /api/jobs", s.withAuth(s.handleJobs))
 	s.mux.HandleFunc("GET /api/jobs/{job_id}", s.withAuth(s.handleJobStatus))
 	s.mux.HandleFunc("POST /api/jobs/{job_id}/cancel", s.withAuth(s.handleCancelJob))
+	s.mux.HandleFunc("GET /api/scheduler/status", s.withAuth(s.handleSchedulerStatus))
 	s.mux.HandleFunc("GET /api/gateway/status", s.withAuth(s.handleGatewayStatus))
 	s.mux.HandleFunc("GET /api/gateway/config", s.withAuth(s.handleGetGatewayConfig))
 	s.mux.HandleFunc("POST /api/gateway/config", s.withAuth(s.handleSaveGatewayConfig))
@@ -339,6 +343,7 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		errorResponse(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	recentJobs, _ := s.jobs.History(jobHistoryFilter{Limit: 10})
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"app": map[string]any{
 			"name":    s.cfg.AppName,
@@ -354,6 +359,7 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 			"json": "/api/export/proxies.json",
 		},
 		"active_jobs": s.jobs.Active(),
+		"recent_jobs": recentJobs,
 		"user": map[string]any{
 			"username": s.usernameFromRequest(r),
 		},
@@ -422,6 +428,16 @@ func (s *server) handleTargetProfiles(w http.ResponseWriter, _ *http.Request) {
 			"keyword":           cfg.Keyword,
 			"timeout_seconds":   cfg.TimeoutSeconds,
 			"enabled":           true,
+			"availability_rule": map[string]any{
+				"generic_allows_base": profile == "generic",
+				"required_capabilities": func() []string {
+					if profile == "generic" {
+						return []string{"base", "web", "api", "web_api"}
+					}
+					return []string{"web", "api", "web_api"}
+				}(),
+				"base_only_enters_gateway": profile == "generic",
+			},
 		})
 	}
 	jsonResponse(w, http.StatusOK, map[string]any{"items": items})
@@ -536,6 +552,30 @@ func (s *server) handleRunCheckJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleActiveJobs(w http.ResponseWriter, _ *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{"items": s.jobs.Active()})
+}
+
+func (s *server) handleJobs(w http.ResponseWriter, r *http.Request) {
+	filter := jobHistoryFilter{
+		Limit:    parseIntQuery(r.URL.Query().Get("limit"), 50, 1, 200),
+		Type:     strings.TrimSpace(r.URL.Query().Get("type")),
+		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
+		BeforeID: int64(anyToInt(r.URL.Query().Get("before_id"))),
+	}
+	items, err := s.jobs.History(filter)
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"items": items, "limit": filter.Limit})
+}
+
+func (s *server) handleSchedulerStatus(w http.ResponseWriter, _ *http.Request) {
+	settings, err := s.store.AppSettings()
+	if err != nil {
+		errorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, s.scheduler.Status(settings))
 }
 
 func (s *server) handleJobStatus(w http.ResponseWriter, r *http.Request) {

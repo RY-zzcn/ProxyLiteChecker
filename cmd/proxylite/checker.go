@@ -100,17 +100,40 @@ var targetProfiles = map[string]TargetProfile{
 }
 
 func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
-	job, ctx, running := s.jobs.CreateIfNoRunning("check", "准备本机检测", "fetch", "check")
-	if running != nil {
-		return nil, runningJobConflict(running)
+	scheduled := strings.EqualFold(optionalString(payload["scheduled_trigger"], ""), "auto")
+	trigger := optionalString(payload["trigger"], "manual")
+	if scheduled && trigger == "manual" {
+		trigger = "periodic"
+	}
+	reason := optionalString(payload["trigger_reason"], trigger)
+	taskKey := optionalString(payload["task_key"], "")
+	intent := automaticIntent{Key: firstNonEmpty(taskKey, "check."+trigger), JobType: "check", Reason: reason, TaskKey: taskKey, ParentJobID: optionalString(payload["parent_job_id"], ""), Payload: cloneMap(payload)}
+	if s.coordinator != nil {
+		acquired, running := s.coordinator.TryAcquire("check", scheduled, intent)
+		if !acquired {
+			if scheduled {
+				return nil, errJobDeferred
+			}
+			if running == nil {
+				running = s.jobs.RunningOfTypes("fetch", "check")
+			}
+			if running == nil {
+				return nil, jobConflict("heavy")
+			}
+			return nil, runningJobConflict(running)
+		}
 	}
 	settings, err := s.store.AppSettings()
 	if err != nil {
-		s.jobs.fail(job.ID, err)
+		if s.coordinator != nil {
+			s.coordinator.AbortReservation()
+		}
 		return nil, err
 	}
 	if _, _, _, err := s.applyProxyMaintenance(settings); err != nil {
-		s.jobs.fail(job.ID, err)
+		if s.coordinator != nil {
+			s.coordinator.AbortReservation()
+		}
 		return nil, err
 	}
 	fallbackProfiles := settings.CheckTargetProfiles
@@ -127,6 +150,23 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 		DeleteFailed:   settings.DeleteFailedOnCheck,
 	}
 	status := optionalString(payload["status"], "untested")
+	job, ctx := s.jobs.CreateWithSpec(jobSpec{
+		Type: "check", Trigger: trigger, TriggerReason: reason, TaskKey: taskKey,
+		ParentJobID: optionalString(payload["parent_job_id"], ""), Message: "准备本机检测",
+		Params: map[string]any{"status": status, "target_profiles": targetProfiles, "limit": cfg.Limit, "concurrent": cfg.Concurrent, "rounds": cfg.Rounds, "request_timeout": cfg.RequestTimeout, "hard_timeout": cfg.HardTimeout},
+	})
+	if job == nil {
+		if s.coordinator != nil {
+			s.coordinator.AbortReservation()
+		}
+		return nil, fmt.Errorf("创建检测任务失败")
+	}
+	if s.coordinator != nil {
+		s.coordinator.Bind(job)
+	}
+	if s.scheduler != nil {
+		s.scheduler.MarkStarted(job)
+	}
 	plans := make([]checkPlan, 0, len(targetProfiles))
 	total := 0
 	for _, profile := range targetProfiles {
@@ -154,7 +194,7 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 	}()
 	total := totalCheckPlanItems(plans)
 	if total == 0 {
-		s.jobs.complete(jobID, "没有符合条件的代理需要检测", map[string]any{"checked": 0})
+		s.jobs.complete(jobID, "没有符合条件的代理需要检测", map[string]any{"checked": 0, "noop": true})
 		return
 	}
 	done := 0

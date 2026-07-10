@@ -44,6 +44,7 @@ func TestTargetSpecificCheckResults(t *testing.T) {
 		Grade:          "F",
 		SuccessRate:    0,
 		TargetProfile:  "openai",
+		BaseReachable:  true,
 		RecommendedUse: "invalid",
 	}); err != nil {
 		t.Fatalf("save openai result: %v", err)
@@ -92,8 +93,8 @@ func TestTargetSpecificCheckResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list aggregate available proxy: %v", err)
 	}
-	if globalTotal != 1 || len(globalItems) != 1 || globalItems[0].Grade != "A" || globalItems[0].TargetProfile != "generic" {
-		t.Fatalf("expected generic availability to keep aggregate status available, total=%d items=%#v", globalTotal, globalItems)
+	if globalTotal != 1 || len(globalItems) != 1 || globalItems[0].Probe == nil || globalItems[0].Probe.Status != "available" || globalItems[0].TargetSummary["generic"].Status != "available" {
+		t.Fatalf("expected probe availability and target summary, total=%d items=%#v", globalTotal, globalItems)
 	}
 	deleted, err := st.DeleteProxyIfNoAvailableTargets(proxyID)
 	if err != nil {
@@ -120,12 +121,13 @@ func TestStatsIncludesTargetAvailability(t *testing.T) {
 		t.Fatalf("list proxies: %v", err)
 	}
 	if err := st.SaveCheckResult(CheckResult{
-		ProxyID:        items[0].ID,
-		Status:         "available",
-		Grade:          "A",
-		SuccessRate:    1,
-		TargetProfile:  "openai",
-		RecommendedUse: "openai",
+		ProxyID:          items[0].ID,
+		Status:           "available",
+		Grade:            "A",
+		SuccessRate:      1,
+		TargetProfile:    "openai",
+		ServiceReachable: true,
+		RecommendedUse:   "openai",
 	}); err != nil {
 		t.Fatalf("save openai result: %v", err)
 	}
@@ -168,6 +170,7 @@ func TestCountAvailableProxyURLsDeduplicatesDetectedProtocol(t *testing.T) {
 			Grade:            "A",
 			SuccessRate:      1,
 			TargetProfile:    "openai",
+			ServiceReachable: true,
 			DetectedProtocol: stringPtr("http"),
 			RecommendedUse:   "openai",
 		}); err != nil {
@@ -237,15 +240,16 @@ func TestAvailableProxyURLsFilteredByCountryAndFallback(t *testing.T) {
 			t.Fatalf("missing country fixture for %s", item.IP)
 		}
 		if err := st.SaveCheckResult(CheckResult{
-			ProxyID:        item.ID,
-			Status:         "available",
-			Grade:          "A",
-			Country:        stringPtr(country),
-			CountryName:    stringPtr(map[string]string{"US": "United States", "JP": "Japan"}[country]),
-			GeoSource:      stringPtr("mmdb"),
-			SuccessRate:    1,
-			TargetProfile:  "openai",
-			RecommendedUse: "openai",
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			Country:          stringPtr(country),
+			CountryName:      stringPtr(map[string]string{"US": "United States", "JP": "Japan"}[country]),
+			GeoSource:        stringPtr("mmdb"),
+			SuccessRate:      1,
+			TargetProfile:    "openai",
+			ServiceReachable: true,
+			RecommendedUse:   "openai",
 		}); err != nil {
 			t.Fatalf("save %s result: %v", item.IP, err)
 		}
@@ -255,13 +259,14 @@ func TestAvailableProxyURLsFilteredByCountryAndFallback(t *testing.T) {
 			continue
 		}
 		if err := st.SaveCheckResult(CheckResult{
-			ProxyID:        item.ID,
-			Status:         "available",
-			Grade:          "A",
-			Country:        stringPtr("US"),
-			SuccessRate:    1,
-			TargetProfile:  "grok",
-			RecommendedUse: "grok",
+			ProxyID:          item.ID,
+			Status:           "available",
+			Grade:            "A",
+			Country:          stringPtr("US"),
+			SuccessRate:      1,
+			TargetProfile:    "grok",
+			ServiceReachable: true,
+			RecommendedUse:   "grok",
 		}); err != nil {
 			t.Fatalf("save grok fallback fixture: %v", err)
 		}
@@ -435,7 +440,11 @@ UPDATE proxies
 SET created_at = datetime('now', '+8 hours', '-4 hours'),
 	    updated_at = datetime('now', '+8 hours', '-4 hours'),
 	    status_changed_at = datetime('now', '+8 hours', '-4 hours')
-WHERE proxy_key = 'http://1.2.3.4:8080'`); err != nil {
+WHERE proxy_key = 'http://1.2.3.4:8080';
+UPDATE proxy_probe_state
+SET status_changed_at = datetime('now', '+8 hours', '-4 hours'),
+    updated_at = datetime('now', '+8 hours', '-4 hours')
+WHERE proxy_id = (SELECT id FROM proxies WHERE proxy_key = 'http://1.2.3.4:8080')`); err != nil {
 		t.Fatalf("age proxy: %v", err)
 	}
 	deleted, err := st.DeleteExpiredUntested(1)
@@ -474,7 +483,9 @@ func TestRequeuedProxyGetsFreshUntestedTTL(t *testing.T) {
 	}
 	if _, err := st.db.Exec(`
 UPDATE proxy_checks SET checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE proxy_id = ?;
-UPDATE proxies SET last_checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE id = ?`, items[0].ID, items[0].ID); err != nil {
+UPDATE proxy_target_state SET checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE proxy_id = ?;
+UPDATE proxy_probe_state SET checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE proxy_id = ?;
+UPDATE proxies SET last_checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE id = ?`, items[0].ID, items[0].ID, items[0].ID, items[0].ID); err != nil {
 		t.Fatalf("age available proxy: %v", err)
 	}
 	requeued, err := st.RequeueExpiredAvailable(1)
@@ -506,16 +517,16 @@ func TestStoredTargetAvailabilityMigrationAndSafeFailedCleanup(t *testing.T) {
 		t.Fatalf("list proxy: items=%#v err=%v", items, err)
 	}
 	proxyID := items[0].ID
-	if _, err := st.db.Exec(`
-INSERT INTO proxy_checks (proxy_id, target_profile, status, grade, exit_ip, service_reachable, api_reachable, recommended_use, checked_at, updated_at)
-VALUES (?, 'grok', 'available', 'B', '8.8.8.8', 0, 0, 'base', datetime('now', '+8 hours'), datetime('now', '+8 hours'))`, proxyID); err != nil {
-		t.Fatalf("insert legacy target result: %v", err)
-	}
-	if _, err := st.db.Exec("UPDATE proxies SET status = 'available' WHERE id = ?", proxyID); err != nil {
-		t.Fatalf("set legacy aggregate status: %v", err)
-	}
-	if err := st.normalizeStoredProxyState(); err != nil {
-		t.Fatalf("normalize stored state: %v", err)
+	if err := st.SaveCheckResult(CheckResult{
+		ProxyID:        proxyID,
+		Status:         "available",
+		Grade:          "B",
+		ExitIP:         stringPtr("8.8.8.8"),
+		BaseReachable:  true,
+		TargetProfile:  "grok",
+		RecommendedUse: "base",
+	}); err != nil {
+		t.Fatalf("save base-only target result: %v", err)
 	}
 	grokFailed, total, err := st.ListProxies(proxyFilter{Status: "failed", TargetProfile: "grok", Limit: 10})
 	if err != nil || total != 1 || len(grokFailed) != 1 || grokFailed[0].RecommendedUse != "base" {
@@ -546,8 +557,10 @@ func TestFailedCleanupRequiresGenericFailureWithoutAvailableTarget(t *testing.T)
 		t.Fatalf("list proxies: items=%#v err=%v", items, err)
 	}
 	for _, item := range items {
-		if err := st.SaveCheckResult(CheckResult{ProxyID: item.ID, Status: "failed", Grade: "F", TargetProfile: "generic", RecommendedUse: "invalid"}); err != nil {
-			t.Fatalf("save generic failure: %v", err)
+		for attempt := 0; attempt < 2; attempt++ {
+			if err := st.SaveCheckResult(CheckResult{ProxyID: item.ID, Status: "failed", Grade: "F", TargetProfile: "generic", RecommendedUse: "invalid"}); err != nil {
+				t.Fatalf("save generic failure: %v", err)
+			}
 		}
 	}
 	if err := st.SaveCheckResult(CheckResult{ProxyID: items[0].ID, Status: "available", Grade: "A", TargetProfile: "grok", APIReachable: boolPtr(true), RecommendedUse: "api"}); err != nil {
@@ -559,5 +572,202 @@ func TestFailedCleanupRequiresGenericFailureWithoutAvailableTarget(t *testing.T)
 	}
 	if deleted != 1 {
 		t.Fatalf("expected only globally unavailable generic failure to be deleted, got %d", deleted)
+	}
+}
+
+func TestStateModelSchemaVersionAndMigrationIdempotency(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	version, err := st.SchemaVersion()
+	if err != nil || version != taskSchedulerMigrationVersion {
+		t.Fatalf("unexpected schema version=%d err=%v", version, err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "legacy", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("list proxy: items=%#v err=%v", items, err)
+	}
+	proxyID := items[0].ID
+	if _, err := st.db.Exec(`
+INSERT INTO proxy_checks (
+  proxy_id, target_profile, status, status_changed_at, grade, exit_ip,
+  service_reachable, api_reachable, recommended_use, checked_at, updated_at
+)
+VALUES (?, 'grok', 'available', datetime('now', '+8 hours', '-1 hour'), 'B', '8.8.8.8', 0, 0, 'base', datetime('now', '+8 hours'), datetime('now', '+8 hours'))
+ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
+  status = excluded.status, exit_ip = excluded.exit_ip, service_reachable = 0,
+  api_reachable = 0, recommended_use = 'base', checked_at = excluded.checked_at,
+  updated_at = excluded.updated_at;
+DROP TABLE proxy_target_state;
+DROP TABLE proxy_probe_state`, proxyID); err != nil {
+		t.Fatalf("prepare legacy state: %v", err)
+	}
+	if _, err := st.db.Exec("DELETE FROM schema_migrations WHERE version = ?", stateModelMigrationVersion); err != nil {
+		t.Fatalf("clear migration record: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("migrate legacy state: %v", err)
+	}
+	var targetStatus, capability string
+	if err := st.db.QueryRow(`
+SELECT status, capability FROM proxy_target_state WHERE proxy_id = ? AND target_profile = 'grok'`, proxyID).Scan(&targetStatus, &capability); err != nil {
+		t.Fatalf("read migrated target: %v", err)
+	}
+	if targetStatus != "failed" || capability != "base" {
+		t.Fatalf("expected strict base-only migration, status=%q capability=%q", targetStatus, capability)
+	}
+	var probeCount, targetCount int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxy_probe_state WHERE proxy_id = ?", proxyID).Scan(&probeCount); err != nil {
+		t.Fatalf("count probe rows: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxy_target_state WHERE proxy_id = ? AND target_profile = 'grok'", proxyID).Scan(&targetCount); err != nil {
+		t.Fatalf("count target rows: %v", err)
+	}
+	if probeCount != 1 || targetCount != 1 {
+		t.Fatalf("unexpected migrated counts probe=%d target=%d", probeCount, targetCount)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxy_probe_state WHERE proxy_id = ?", proxyID).Scan(&probeCount); err != nil || probeCount != 1 {
+		t.Fatalf("migration was not idempotent, count=%d err=%v", probeCount, err)
+	}
+	var integrity string
+	if err := st.db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("integrity check=%q err=%v", integrity, err)
+	}
+}
+
+func TestProbeAndTargetStateRemainIndependent(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	proxyID := items[0].ID
+	if err := st.SaveCheckResult(CheckResult{
+		ProxyID: proxyID, Status: "available", Grade: "A", TargetProfile: "openai",
+		BaseReachable: true, ServiceReachable: true, RecommendedUse: "web",
+	}); err != nil {
+		t.Fatalf("save openai availability: %v", err)
+	}
+	if err := st.SaveCheckResult(CheckResult{
+		ProxyID: proxyID, Status: "failed", Grade: "F", TargetProfile: "grok",
+		BaseReachable: true, RecommendedUse: "base",
+	}); err != nil {
+		t.Fatalf("save grok failure: %v", err)
+	}
+	var probeStatus, openAIStatus, grokStatus string
+	if err := st.db.QueryRow("SELECT status FROM proxy_probe_state WHERE proxy_id = ?", proxyID).Scan(&probeStatus); err != nil {
+		t.Fatalf("read probe: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT status FROM proxy_target_state WHERE proxy_id = ? AND target_profile = 'openai'", proxyID).Scan(&openAIStatus); err != nil {
+		t.Fatalf("read openai: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT status FROM proxy_target_state WHERE proxy_id = ? AND target_profile = 'grok'", proxyID).Scan(&grokStatus); err != nil {
+		t.Fatalf("read grok: %v", err)
+	}
+	if probeStatus != "available" || openAIStatus != "available" || grokStatus != "failed" {
+		t.Fatalf("state dimensions overwrote each other: probe=%s openai=%s grok=%s", probeStatus, openAIStatus, grokStatus)
+	}
+	if _, err := st.db.Exec("UPDATE proxy_checks SET status = 'available' WHERE proxy_id = ? AND target_profile = 'grok'", proxyID); err != nil {
+		t.Fatalf("mutate legacy shadow: %v", err)
+	}
+	exported, err := st.ExportAvailable("grok", 10)
+	if err != nil || len(exported) != 0 {
+		t.Fatalf("legacy shadow influenced export: items=%#v err=%v", exported, err)
+	}
+}
+
+func TestTargetAndProbeTTLRequeueIndependently(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	proxyID := items[0].ID
+	if err := st.SaveCheckResult(CheckResult{
+		ProxyID: proxyID, Status: "available", Grade: "A", TargetProfile: "openai",
+		BaseReachable: true, ServiceReachable: true, RecommendedUse: "web",
+	}); err != nil {
+		t.Fatalf("save result: %v", err)
+	}
+	if _, err := st.db.Exec(`
+UPDATE proxy_target_state SET checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE proxy_id = ?;
+UPDATE proxy_probe_state SET checked_at = datetime('now', '+8 hours'), updated_at = datetime('now', '+8 hours') WHERE proxy_id = ?`, proxyID, proxyID); err != nil {
+		t.Fatalf("age target only: %v", err)
+	}
+	if _, err := st.RequeueExpiredAvailable(1); err != nil {
+		t.Fatalf("requeue target: %v", err)
+	}
+	var probeStatus, targetStatus, targetChanged string
+	if err := st.db.QueryRow("SELECT status FROM proxy_probe_state WHERE proxy_id = ?", proxyID).Scan(&probeStatus); err != nil {
+		t.Fatalf("read probe: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT status, status_changed_at FROM proxy_target_state WHERE proxy_id = ? AND target_profile = 'openai'", proxyID).Scan(&targetStatus, &targetChanged); err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if probeStatus != "available" || targetStatus != "untested" || targetChanged == "" {
+		t.Fatalf("TTL dimensions not independent: probe=%s target=%s changed=%q", probeStatus, targetStatus, targetChanged)
+	}
+}
+
+func TestCheckStateWriteIsAtomic(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	proxyID := items[0].ID
+	if _, err := st.db.Exec(`
+CREATE TRIGGER reject_target_state_insert
+BEFORE INSERT ON proxy_target_state
+BEGIN
+  SELECT RAISE(ABORT, 'target write rejected');
+END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	err = st.SaveCheckResult(CheckResult{
+		ProxyID: proxyID, Status: "available", Grade: "A", TargetProfile: "openai",
+		BaseReachable: true, ServiceReachable: true, RecommendedUse: "web",
+	})
+	if err == nil {
+		t.Fatalf("expected target state write failure")
+	}
+	var probeStatus string
+	if err := st.db.QueryRow("SELECT status FROM proxy_probe_state WHERE proxy_id = ?", proxyID).Scan(&probeStatus); err != nil {
+		t.Fatalf("read probe status: %v", err)
+	}
+	if probeStatus != "untested" {
+		t.Fatalf("probe write escaped rolled-back transaction: %s", probeStatus)
+	}
+	var targetCount int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxy_target_state WHERE proxy_id = ?", proxyID).Scan(&targetCount); err != nil || targetCount != 0 {
+		t.Fatalf("unexpected target rows=%d err=%v", targetCount, err)
 	}
 }

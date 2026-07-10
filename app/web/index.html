@@ -36,7 +36,7 @@
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.3.4</span> · 额丶Y</small>
+            <small><span id="versionText">v0.4.1</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -53,15 +53,15 @@
           <strong id="statTotal">0</strong>
         </article>
         <article class="metric success">
-          <span>唯一可用</span>
+          <span>目标唯一可用</span>
           <strong id="statAvailable">0</strong>
         </article>
         <article class="metric warning">
-          <span>待检</span>
+          <span>基础待检</span>
           <strong id="statUntested">0</strong>
         </article>
         <article class="metric danger">
-          <span>失败</span>
+          <span>基础失败</span>
           <strong id="statFailed">0</strong>
         </article>
       </section>
@@ -270,6 +270,26 @@
                     <label><input type="checkbox" value="gemini" />Gemini</label>
                     <label><input type="checkbox" value="claude" />Claude</label>
                   </div>
+                </div>
+                <div class="maintenance-grid">
+                  <label class="switch-row">
+                    <input id="targetLowStockEnabled" type="checkbox" />
+                    <span>目标低库存维护</span>
+                  </label>
+                  <label class="switch-row">
+                    <input id="checkAfterFetchEnabled" type="checkbox" />
+                    <span>拉取新增后自动检测</span>
+                  </label>
+                </div>
+                <div class="mini-grid">
+                  <label>
+                    目标可用阈值
+                    <input id="targetLowStockMinimum" type="number" min="1" max="1000000" />
+                  </label>
+                  <label>
+                    候选优先检测阈值
+                    <input id="targetCandidateMinimum" type="number" min="1" max="1000000" />
+                  </label>
                 </div>
                 <div class="mini-grid four">
                   <label>

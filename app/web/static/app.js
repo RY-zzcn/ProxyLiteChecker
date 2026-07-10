@@ -212,6 +212,11 @@ function defaultSettings() {
     auto_fetch_source_ids: [],
     auto_check_enabled: false,
     auto_check_interval_minutes: 120,
+    target_low_stock_enabled: false,
+    target_low_stock_profiles: ["generic"],
+    target_low_stock_minimum: 50,
+    target_candidate_minimum: 200,
+    check_after_fetch_enabled: true,
     gateway_upstream_limit: 200,
     gateway_upstream_strategy: "round_robin",
     gateway_countries: [],
@@ -304,7 +309,7 @@ async function bootstrap() {
   renderSources();
   renderGateway(payload.gateway || {});
   const activeJobs = payload.active_jobs || [];
-  renderJobs(activeJobs);
+  renderJobs(activeJobs.length ? activeJobs : payload.recent_jobs || []);
   if (activeJobs.length) {
     state.watchedJobId = activeJobs[0].id;
     startPolling();
@@ -327,7 +332,8 @@ function renderStats(stats) {
   const availableMetric = el("statAvailable").closest(".metric");
   if (availableMetric) {
     const recordText = Number(stats.available_records || 0) > Number(stats.available || 0) ? `；记录 ${Number(stats.available_records || 0)}` : "";
-    availableMetric.title = targetText ? `目标可用上游：${targetText}${recordText}` : "按唯一上游统计";
+    const transportText = `；基础链路可用 ${Number(stats.transport_available || 0)}`;
+    availableMetric.title = targetText ? `目标可用上游：${targetText}${recordText}${transportText}` : `暂无目标可用上游${transportText}`;
   }
 }
 
@@ -377,6 +383,10 @@ function renderSettings(settings, scheduler) {
   el("autoFetchCooldown").value = state.settings.auto_fetch_cooldown_minutes;
   el("autoCheckEnabled").checked = Boolean(state.settings.auto_check_enabled);
   el("autoCheckInterval").value = state.settings.auto_check_interval_minutes;
+  el("targetLowStockEnabled").checked = Boolean(state.settings.target_low_stock_enabled);
+  el("targetLowStockMinimum").value = state.settings.target_low_stock_minimum;
+  el("targetCandidateMinimum").value = state.settings.target_candidate_minimum;
+  el("checkAfterFetchEnabled").checked = state.settings.check_after_fetch_enabled !== false;
   el("deleteFailedOnCheck").checked = Boolean(state.settings.delete_failed_on_check);
   el("recheckExpiredEnabled").checked = Boolean(state.settings.recheck_expired_enabled);
   el("availableTtlHours").value = state.settings.available_ttl_hours;
@@ -423,6 +433,14 @@ function renderSchedulerText(scheduler) {
       `维护 失败 ${scheduler.maintenance.failed_deleted || 0} / 回检 ${scheduler.maintenance.expired_requeued || 0} / 待检 ${scheduler.maintenance.untested_deleted || 0}`,
     );
   }
+  if (scheduler?.blocking_job) {
+    parts.push(`阻塞 ${scheduler.blocking_job.type} #${scheduler.blocking_job.id}`);
+  }
+  if ((scheduler?.pending || []).length) {
+    parts.push(`延后 ${(scheduler.pending || []).map((item) => item.reason).join("/")}`);
+  }
+  const backoff = (scheduler?.states || []).find((item) => item.backoff_until);
+  if (backoff) parts.push(`退避至 ${displayTimestamp(backoff.backoff_until, backoff.backoff_until)}`);
   el("schedulerText").textContent = parts.length ? parts.join(" · ") : scheduler?.message || "自动任务未启用";
 }
 
@@ -687,7 +705,7 @@ function gatewayHostFromBind(value) {
 }
 
 function renderJobs(jobs) {
-  const job = jobs.find((item) => ["running", "cancel_requested"].includes(item.status)) || jobs[0] || null;
+  const job = jobs.find((item) => ["queued", "running", "cancel_requested", "cancelling"].includes(item.status)) || jobs[0] || null;
   state.activeJob = job;
   if (!job) {
     el("taskSubtitle").textContent = "空闲";
@@ -700,11 +718,14 @@ function renderJobs(jobs) {
   const typeText = { fetch: "拉取", check: "检测" }[job.type] || job.type;
   const statusText = {
     running: "运行中",
+    queued: "排队中",
     cancel_requested: "正在停止",
+    cancelling: "正在收尾",
     completed: "已完成",
     partial: "部分完成",
     failed: "失败",
     cancelled: "已取消",
+    interrupted: "重启中断",
   }[job.status] || job.status;
   el("taskSubtitle").textContent = `${typeText} · ${statusText} · ${job.done}/${job.total}`;
   el("jobMessage").textContent = `${job.message || ""} ${percent}%`;
@@ -882,7 +903,7 @@ function startPolling() {
         job = jobs[0] || null;
         if (job) state.watchedJobId = String(job.id);
       }
-      if (job && ["completed", "partial", "failed", "cancelled"].includes(job.status)) {
+      if (job && ["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) {
         state.pollTimer = null;
         state.watchedJobId = null;
         await loadStats();
@@ -896,6 +917,8 @@ function startPolling() {
           toast(job.message || "任务部分完成", "info");
         } else if (job.status === "cancelled") {
           toast(job.message || "任务已取消", "info");
+        } else if (job.status === "interrupted") {
+          toast(job.error || "任务因服务重启中断", "warning");
         } else {
           toast(job.error || job.message || "任务失败", "error");
         }
@@ -977,6 +1000,11 @@ async function saveSettings(event) {
         auto_fetch_source_ids: allSourcesSelected ? [] : selectedSourceIDs,
         auto_check_enabled: el("autoCheckEnabled").checked,
         auto_check_interval_minutes: Number(el("autoCheckInterval").value || 120),
+        target_low_stock_enabled: el("targetLowStockEnabled").checked,
+        target_low_stock_profiles: checkTargets,
+        target_low_stock_minimum: Number(el("targetLowStockMinimum").value || 50),
+        target_candidate_minimum: Number(el("targetCandidateMinimum").value || 200),
+        check_after_fetch_enabled: el("checkAfterFetchEnabled").checked,
         gateway_upstream_limit: Number(el("gatewayUpstreamLimit").value || 200),
         gateway_upstream_strategy: el("gatewayUpstreamStrategy").value,
         gateway_countries: normalizeCountryCodesInput(el("gatewayCountries").value),

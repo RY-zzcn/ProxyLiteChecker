@@ -1,0 +1,332 @@
+# ProxyLiteChecker 项目接手与进度总览
+
+- 状态：`v0.4.1` 代码实现完成，但本机 8899 验证与 GitHub 发布闭环未完成；按硬性要求仍为“进行中”
+- 当前代码版本：`v0.4.1`
+- 当前已发布版本：`v0.3.4`
+- 当前唯一收尾阶段：更新并验证本机 8899 部署，提交并发布 `v0.4.1`
+- 下一开发版本：`v0.4.2`
+- 路线图终点：`v0.4.2`
+- 最后校准日期：2026-07-10
+- 已发布版本提交：`73c6d4fb34f2e7898ee4b21bf9b3b9090b9f4d80`（v0.3.4）
+- v0.4.1 工作区基线：上述提交加未提交改动
+
+本文是后续 Codex 会话的第一份项目状态入口。详细开发范围、数据模型、测试矩阵和每个版本的完成定义见 [ROADMAP_V0.4.0_TO_V0.4.2.md](ROADMAP_V0.4.0_TO_V0.4.2.md)。
+
+## 1. 30 秒接手摘要
+
+ProxyLiteChecker 是一个单机轻量代理维护服务。一个 Go 进程负责 Web UI、HTTP API、SQLite、代理源拉取、本机检测、TXT/JSON 导出以及 HTTP/SOCKS5 目标网关。
+
+当前工作区已在 `v0.3.4` 可靠性热修基础上完成 `v0.4.0` 状态模型和 `v0.4.1` 持久化任务调度：
+
+- `proxies` 只作为代理身份和来源记录；旧质量列继续作为回退影子。
+- `proxy_probe_state` 成为基础协议、出口、GeoIP、基础状态和连续失败的唯一真相。
+- `proxy_target_state` 成为各目标状态、capability、等级和失败的唯一真相。
+- `schema_migrations` 记录显式迁移版本；当前 schema 版本为 `400001`。
+- v0.3.4 数据会自动回填；命名目标 `base-only` 保留诊断能力但重分类为不可用。
+- 导出、网关、目标库存、删除和 TTL 已停止读取主表质量快照。
+- 代理 API 新增 `probe`、`target_state`、`target_summary`；统计区分基础可用和目标唯一可用。
+- probe 与 target 状态分别维护转换时间，周期清理要求连续基础失败。
+- `job_runs` 持久化任务参数、进度、终态、父子关系和实例 ID，任务 ID 跨重启不重复。
+- `scheduler_state` 持久化计划时间、终态、失败次数、退避和 pending reason。
+- 重启会把遗留活动任务标记为 `interrupted`，并只安排一次恢复 catch-up。
+- `workCoordinator` 统一管理重任务槽位、取消收尾、自动触发合并和拉取/检测公平轮转。
+- 目标低库存先检测已有候选，候选不足才补源；拉取确有新增时才链接父子检测任务。
+
+当前最重要的剩余工作是完成路线终点：
+
+1. `v0.4.2`：改为代理优先检测，消除多目标重复探测，并完成 GeoIP 缓存、统计聚合、网关锁外刷新和前端轮询降载。
+
+除非出现必须单独发布的回归热修，`v0.3.5` 至 `v0.3.9` 不安排功能版本，避免为了版本号切碎同一结构迁移。
+
+## 2. 文档真相优先级
+
+后续会话发现内容不一致时，按以下顺序判断真实状态：
+
+1. 当前代码、数据库迁移逻辑和自动化测试。
+2. `CHANGELOG.md`、Git 标签和 GitHub Release。
+3. 本文的当前进度记录。
+4. `docs/ROADMAP_V0.4.0_TO_V0.4.2.md` 的待办状态。
+5. 历史设计文档。
+
+旧优化草案、GeoIP 设计进度和 v0.3.4 单版本计划已经完整归并到本文、当前路线图和 `CHANGELOG.md` 后删除。后续不得根据 Git 历史中的旧版本建议覆盖当前路线图；如需追溯，只读取对应提交，不恢复成并行的活动计划。
+
+## 3. 产品边界
+
+必须保持：
+
+- 单机部署、单个 Go 服务、SQLite、本机检测、本机网关。
+- 所有代理质量结论只代表运行 ProxyLiteChecker 的这台机器所处网络。
+- 内置目标当前为 `generic`、`openai`、`grok`、`gemini`、`claude`。
+- 保持单二进制友好，不引入必须单独部署的队列、缓存或数据库服务。
+- 保持与 `/root/ProxyPoolChecker` 完全分离。
+
+当前路线图明确不做：
+
+- panel/agent、多节点注册、心跳、分布式检测和远程任务派发。
+- 把 sing-box 或其它大型代理内核作为必需运行依赖。
+- 在完成状态模型和调度器之前开放任意自定义检测脚本。
+- 长期保存每一次网关请求明细。
+
+## 4. 当前代码结构
+
+| 路径 | 当前职责 | 后续主要变化 |
+| --- | --- | --- |
+| `cmd/proxylite/main.go` | 启动、配置、认证、API 路由 | 增加任务历史、调度状态和升级后的状态 API |
+| `cmd/proxylite/store.go` | SQLite migration、代理身份、probe/target 权威状态和兼容影子写入 | v0.4.2 聚合 SQL 和批量写入 |
+| `cmd/proxylite/checker.go` | 检测计划、并发 worker、目标探测 | v0.4.2 改为代理优先的基础探测与目标探测流水线 |
+| `cmd/proxylite/jobs.go` | SQLite 持久化任务状态机、进度节流、历史和重启中断恢复 | v0.4.2 保持完成事件接口 |
+| `cmd/proxylite/settings.go` | 持久化调度、退避、低库存、完成事件和生命周期维护 | v0.4.2 接入代理优先检测完成事件 |
+| `cmd/proxylite/coordinator.go` | 单一重任务槽位、自动意图合并和公平仲裁 | v0.4.2 保持协调边界 |
+| `cmd/proxylite/sources.go` | 内置代理源和拉取任务 | v0.4.1 接入任务完成事件；后续再做源质量闭环 |
+| `cmd/proxylite/gateway.go` | HTTP/SOCKS5 网关、重试和统计 | v0.4.2 状态缓存和运行指标降载 |
+| `cmd/proxylite/gateway_selector.go` | 内存池、选择策略、失败隔离 | v0.4.2 锁外刷新、EWMA 和半开探测 |
+| `internal/checkmeta` | GeoIP MMDB、外部 IP 元数据 | v0.4.2 缓存、限速、singleflight 和热更新修复 |
+| `app/web` | 无构建步骤的嵌入式单页控制台 | 各版本仅增加必要展示，v0.4.2 统一轮询和诊断信息 |
+
+当前运行数据使用 SQLite WAL。`jobManager` 和 `scheduler` 仍只保存在内存中，服务重启后任务历史、下次执行时间和调度失败次数会丢失。
+
+## 5. 当前版本与验证状态
+
+`v0.3.4` 发布状态：已完成。
+
+- `main`：已推送到 `73c6d4f`。
+- 标签：`v0.3.4`，annotated tag 已推送。
+- Release：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.3.4>
+- Release 资产：六个平台二进制、源码包和 `SHA256SUMS`。
+- GHCR：`v0.3.4`、`0.3.4`、`0.3`，支持 `linux/amd64` 和 `linux/arm64`。
+- 镜像摘要：`sha256:a782ea55677cb5e387b0a29d325d97c52088e703ae14d1d7b517e661a5a5ea0d`。
+
+已通过：
+
+- `./scripts/preflight_check.sh`
+- `go test ./...`
+- `go vet ./...`
+- `TMPDIR=/root/.cache go test -race -count=1 ./...`
+- Windows amd64 和 Linux arm64 交叉编译
+- 19,457 条代理的真实 SQLite 备份迁移和完整性验证
+- 任务完成、部分成功、失败、取消以及 API 终态冒烟测试
+
+`v0.4.0-v0.4.1` 实现状态：本地完成，未发布。
+
+- 新增表：`schema_migrations`、`proxy_probe_state`、`proxy_target_state`。
+- 迁移版本：`400001`，迁移事务可重复启动且第二次不重复应用。
+- 真实 v0.3.4 备份：19,457 个代理、1,581 个旧目标结果；迁移后代理数不变、probe 行 19,457、target 行 1,581、缺失目标 0、命名目标非法可用 0、孤立行 0、完整性检查 `ok`。
+- 已通过：`go test ./...`；最终 vet、race、preflight 和 API 冒烟结果见本文末尾本轮记录。
+- 工作区包含未提交变更；未推送、未打标签、未创建 Release 或 GHCR 镜像。
+- v0.4.1 新增表：`job_runs`、`scheduler_state`、`coordinator_state`；schema 版本提升至 `401001`。
+
+下一次开始开发时仍必须重新运行基线检查，不能把本节当作当前工作区永远有效的测试结果。
+
+## 6. 深度审查问题闭环表
+
+| 编号 | 原问题 | v0.3.4 后状态 | 后续归属 |
+| --- | --- | --- | --- |
+| P0-1 | 仅基础出口可达也被计为命名目标可用 | 已完成。命名目标必须 Web/API 可达；base 只保留诊断能力 | v0.4.0 将能力和状态正式拆表 |
+| P0-2 | `proxies` 与目标结果形成两套真相，单目标失败可能误删 | 已完成。probe/target 各有唯一权威表，主表和 `proxy_checks` 仅保留回退影子 | v0.4.0 |
+| P0-3 | 取消立即释放重任务锁 | 已完成。`cancel_requested` 仍属于活动状态，worker 确认后才进入 `cancelled` | v0.4.1 持久化并补 `cancelling/interrupted` |
+| P0-4 | 全源失败、落库失败、前端终态显示假成功 | 已完成。终态和前端 job ID 轮询已修正 | v0.4.1 持久化任务历史和配置快照 |
+| P1-5 | 调度状态仅在内存，保存设置会推迟任务 | 部分完成。无关设置不再重置计划；重启仍丢失状态，调度器仍不知道最终结果 | v0.4.1 |
+| P1-6 | 自动拉取长期压制自动检测 | 部分完成。tick 已改为检测先于拉取；尚无公平仲裁、触发合并和完成事件 | v0.4.1 |
+| P1-7 | 维护过频、重复计数、待检 TTL 时间错误 | 已完成状态层部分。probe/target 独立转换时间和重排队，待检 TTL 使用转换时间 | v0.4.0；调度持久化仍属 v0.4.1 |
+| E-8 | 多目标重复协议、出口 IP、GeoIP 和基础探测 | 未完成。当前仍以目标为外层循环 | v0.4.2 |
+| E-9 | 外部 GeoIP 元数据处于关键路径且无缓存；热更新有竞态 | 未完成 | v0.4.2 |
+| G-10 | 网关持锁查库、统计 SQL 多、前端轮询重、稳定优先过于短视 | 未完成 | v0.4.2 |
+
+## 7. 当前必须保持的行为不变量
+
+任何后续重构都必须有测试保护以下行为：
+
+1. `generic` 可使用基础出口或通用站点可达判定；命名目标必须 Web 或 API 至少一个可达。
+2. base-only 结果不得进入 OpenAI、Grok、Gemini、Claude 的导出和网关池。
+3. 一个目标失败不得覆盖或删除其它目标的可用状态。
+4. 只有基础链路确认失败、计划目标都失败、结果成功持久化且不存在其它可用目标时，才允许立即硬删除。
+5. `running`、`cancel_requested`，以及 v0.4.1 后的 `cancelling` 都必须占用重任务槽位。
+6. 全部源失败为 `failed`，部分源失败为 `partial`，无候选为成功但结果包含 `noop=true`。
+7. 状态 TTL 从该状态的 `status_changed_at` 开始，不得退回使用旧检测时间。
+8. 自动检测不能被连续低库存拉取永久饿死。
+9. 网关失败时可以继续使用最后一次成功装载的内存池。
+10. 所有用户展示时间和调度时间继续使用 `Asia/Shanghai`。
+
+## 8. 当前已知结构性债务
+
+### 8.1 状态模型
+
+- v0.4.0 已建立 probe/target 唯一状态边界。
+- `proxies` 旧质量列与 `proxy_checks` 仍同步写入，作为一个版本线内的回退影子；不得恢复为业务权威查询。
+- 当前检查器仍按目标重复产生基础探测，v0.4.2 才会改成代理优先并一次保存多目标 bundle。
+
+### 8.2 任务与调度
+
+- job ID 从进程内计数器开始，重启后重新计数。
+- 任务历史最多只在内存保留 200 条。
+- 重启无法区分“上次正常空闲”与“任务中途进程退出”。
+- 调度器只知道任务是否创建成功，不知道最终 `completed/partial/failed/cancelled`。
+- 冲突通过一分钟后重试处理，尚未区分正常 deferred 与真实错误。
+- 周期触发和低库存触发没有统一合并与公平轮转。
+
+### 8.3 检测、GeoIP 和数据库
+
+- 每个目标会重复协议探测、出口 IP 查询和 GeoIP 查询。
+- 单条目标结果使用独立事务保存，并对单个代理重复聚合状态。
+- 外部 IP 元数据查询默认发生在检测关键路径，没有出口 IP 缓存、限速或请求合并。
+- GeoIP 首次加载失败受 `sync.Once` 限制，reader 更新和手动/自动更新需要更严格互斥。
+- `Stats()` 和目标统计会执行多次查询；高频前端轮询会放大开销。
+
+### 8.4 网关
+
+- selector 在互斥锁内查询 SQLite，慢查询会阻塞所有选路。
+- `stability_first` 只参考运行期连续失败，一次成功会清空全部历史。
+- 全池隔离时当前会一次清空失败记录，缺少半开探测和降级候选语义。
+- 内存池仍以 URL 字符串为主，缺少检测时间、EWMA 延迟和稳定性快照。
+
+## 9. 版本路线摘要
+
+| 版本 | 状态 | 单一主题 | 完成后得到什么 |
+| --- | --- | --- | --- |
+| `v0.3.4` | 已发布 | 可靠性热修 | 正确的目标可用、删除、取消、终态、TTL 和基本调度优先级 |
+| `v0.4.0` | 本地实现完成，待发布 | 状态模型 | `proxies` 只负责身份；基础探测和目标状态各有唯一真相 |
+| `v0.4.1` | 进行中：代码完成，待 8899 验证与 GitHub 发布 | 任务与调度 | job 和 scheduler 可持久化、可恢复、可公平仲裁并感知真实终态 |
+| `v0.4.2` | 未开始 | 性能与可观测性 | 每个代理基础探测一次，GeoIP 不阻塞，统计和网关低开销 |
+
+详细工作包、表结构、API、测试和验收标准见 [ROADMAP_V0.4.0_TO_V0.4.2.md](ROADMAP_V0.4.0_TO_V0.4.2.md)。
+
+## 10. 后续 Codex 会话标准流程
+
+当用户要求继续开发时，先执行：
+
+```bash
+cd /root/ProxyLiteChecker
+git status --short --branch
+git log -1 --oneline --decorate
+sed -n '1,240p' AGENTS.md
+sed -n '1,280p' docs/PROJECT_HANDOFF.md
+sed -n '1,360p' docs/ROADMAP_V0.4.0_TO_V0.4.2.md
+./scripts/check_version_consistency.sh
+go test ./...
+```
+
+然后：
+
+1. 检查工作区是否存在用户未提交改动，不得覆盖。
+2. 对照 `CHANGELOG.md`、版本常量和路线图，确认当前真实版本。
+3. 找到路线图中第一个“进行中”或“未开始”的版本；当前应从 `v0.4.2` 开始。
+4. 实施前先为关键状态转换、迁移和失败路径补测试。
+5. 涉及 SQLite 时使用真实旧版本备份副本验证升级，不直接修改运行库。
+6. 开发过程中实时更新本文和路线图，不能等到会话结束才补记录。每完成一个工作包、迁移、重要重构或验证节点，立即记录：当前工作包、已完成内容、已执行测试、当前阻塞和唯一下一步；执行长时间测试或发布命令前先写下待执行命令。
+7. 阶段实现完成后，备份必要数据，更新并重启本机现有 `127.0.0.1:8899` 部署，只在该端口完成 health、登录/bootstrap、变更 API、Web 和必要网关冒烟；不得额外部署临时 ProxyLiteChecker 实例或改用其它应用端口。
+8. 同步更新路线图勾选项、`CHANGELOG.md`、README、版本常量和发布文件。
+9. 每个阶段必须完成 Git commit、推送 GitHub、annotated tag、GitHub Release、发布资产以及发布工作流包含的 GHCR 标签。上述步骤未全部成功时不得把阶段标记为“已完成”。
+10. 若网络、凭据、CI 或发布资产阻塞，记录精确错误和恢复命令，将阶段保持为“进行中/阻塞”，不得跳过发布直接开始下一版本。
+
+上述三条是项目长期硬性要求，用户本次指令已经提供后续执行所需的常驻授权；未来会话不再把正常的阶段提交、推送、打标签和发布视为需要再次确认的可选步骤。
+
+## 11. 一句话恢复提示
+
+下次用户可以直接说：
+
+> 继续 ProxyLiteChecker，读取项目接手文档并按路线图从第一个未完成版本继续，完成实现、测试和进度记录。
+
+根目录 `AGENTS.md` 会要求 Codex 自动读取本文和详细路线图，因此不需要用户重新粘贴历史审查内容。
+
+## 12. 每次开发结束必须更新
+
+- 当前正式版本和下一版本。
+- 当前提交、标签和发布状态。
+- 本轮实际完成的路线图工作包。
+- 新增或改变的数据表、状态机和兼容策略。
+- 执行过的测试，以及未执行测试的原因。
+- 开发过程中的实时断点：当前工作包、最近完成动作、当前命令/阻塞和唯一下一步。
+- 本机 `127.0.0.1:8899` 部署更新、重启与冒烟测试结果。
+- Git commit、push、tag、GitHub Release、发布资产和 GHCR 状态。
+- 仍存在的阻塞、风险和下一条明确可执行任务。
+- 工作区是否包含尚未提交或尚未推送的变更。
+
+没有完成上述记录、本机 8899 验证和 GitHub 发布闭环时，不应把一个版本标记为已完成。
+
+## 12.1 实时断点记录格式
+
+开发过程中在本文最新实施记录或路线图进度区持续维护以下内容：
+
+```text
+更新时间：YYYY-MM-DD HH:MM Asia/Shanghai
+当前版本 / 工作包：
+最近完成：
+正在执行或准备执行的命令：
+已通过验证：
+当前阻塞：
+唯一下一步：
+```
+
+任何可能超过数分钟的测试、迁移、构建或发布操作开始前，先更新“正在执行或准备执行的命令”；操作结束后立即写入结果。这样即使会话或进程突然中断，也能从唯一下一步恢复。
+
+## 13. 2026-07-10 v0.4.0 实现记录
+
+- 状态：代码实现完成；因本机 8899 验证与 GitHub 发布尚未闭环，按新硬性要求保持“进行中”。
+- 完成工作包：`V040-MIGRATION`、`V040-STORE`、`V040-LIFECYCLE`、`V040-API-UI`、`V040-TEST`。
+- 数据迁移：新增 `schema_migrations`、`proxy_probe_state`、`proxy_target_state`；schema 版本 `400001`；保留 `proxy_checks` 和主表质量列作为兼容影子。
+- 兼容策略：所有状态写入在一个事务中同步 probe、target 和旧影子；业务读取只使用新状态表；旧版本回退前仍建议恢复升级前备份。
+- 真实库验证：使用 `/root/.cache/proxylite-v034-migration.db` 的副本，迁移前后均为 19,457 个代理；1,581 个旧目标结果全部回填；probe 行 19,457；target 行 1,581；命名目标 `available + base/none` 为 0；缺失和孤立行均为 0；`foreign_key_check` 无输出；`integrity_check=ok`；迁移记录 app version 为 `0.4.0`。
+- 自动化验证：`go test ./...`、`go vet ./...`、`TMPDIR=/root/.cache go test -race -count=1 ./...`、`./scripts/preflight_check.sh`、Windows amd64 和 Linux arm64 交叉编译全部通过。
+- API 冒烟：通过无网络监听的 handler 级测试验证 `/api/proxies`、`/api/stats` 和 `/api/target-profiles` 的 v0.4.0 字段与兼容语义。受当前沙箱限制，真实 TCP 监听返回 `socket: operation not permitted`，不属于应用失败。
+- 工作区：包含 v0.4.0 实现、此前接手文档整理和旧计划文档删除，均未提交、未推送；没有修改 `/root/ProxyPoolChecker`。
+- 剩余风险：旧影子字段仍会同步写入，必须持续防止后续代码把它们重新用作权威查询；v0.4.2 前多目标检测仍会重复基础探测。
+- 下一条明确任务：开始 `v0.4.1` 的 `V041-MIGRATION`，新增 `job_runs` 与 `scheduler_state`，先补任务持久化和重启中断测试。
+
+## 14. 2026-07-10 v0.4.1 实现记录
+
+- 状态：本地实现完成，尚未提交或发布。
+- 完成工作包：`V041-MIGRATION`、`V041-COORDINATOR`、`V041-ARBITRATION`、`V041-RECOVERY`、`V041-API-UI`、`V041-TEST`。
+- 数据迁移：schema 版本 `401001`；新增 `job_runs`、`scheduler_state`、`coordinator_state`，不修改或删除 v0.4.0 状态表。
+- 任务语义：SQLite 自增 job ID；持久化参数、进度、终态、错误、结果、实例 ID 和父任务；进度按 10 项或 1 秒节流；活动任务重启后转为 `interrupted`。
+- 协调语义：`workCoordinator` 是唯一重任务槽位；手动冲突返回活动任务；自动冲突合并 pending；`cancel_requested/cancelling` 保持占槽；终态回调后才释放。
+- 调度语义：计划时间、pending、真实终态、失败次数和退避持久化；退避为 `1m/2m/5m/10m/30m`；成功清零；拉取和检测连续授权上限为 2。
+- 流水线：目标低库存先检查现有待检候选，候选不足再拉取；只有拉取 `added>0` 才创建带 `parent_job_id` 的检测任务，相同目标 pending 会合并。
+- API/UI：新增任务历史列表和 scheduler status；bootstrap 仅返回最近 10 条任务；Web 识别 `cancelling/interrupted` 并展示阻塞、pending 和 backoff。
+- 真实库验证：从 19,457 代理的 v0.4.0 数据库副本升级，代理/probe/target 数量保持 19,457/19,457/1,581；迁移记录 app version `0.4.1`；外键检查无输出；完整性检查 `ok`。
+- 自动化验证：`go test ./...`、`go vet ./...`、`TMPDIR=/root/.cache go test -race -count=1 ./...`、`./scripts/preflight_check.sh`、Windows amd64 和 Linux arm64 交叉编译全部通过；前端 `node --check` 通过。
+- 工作区：v0.4.0 与 v0.4.1 仍处于同一未提交工作区；未推送、未打标签、未发布。
+- 剩余风险：自动任务只在单进程内协调，不提供多进程 leader election；网络任务重启后不会断点续跑；v0.4.2 前检测仍按目标重复基础请求。
+- 实时断点（2026-07-10 Asia/Shanghai）：已把持续进度记录、阶段强制 GitHub 发布和唯一 8899 集成部署写入指导文档；本次未执行部署或发布。
+- 正在执行或准备执行的命令：下一会话先运行备份与现有 8899 更新流程，再执行 health/login/bootstrap/API/Web 冒烟，随后 commit、push、annotated `v0.4.1` tag、GitHub Release、资产与 GHCR 检查。
+- 下一条明确任务：完成 `v0.4.1` 的本机 `127.0.0.1:8899` 更新测试和 GitHub 发布闭环；全部成功后才开始 `v0.4.2 / V042-CHECK-PLAN`。
+
+### v0.4.1 发布闭环实时断点
+
+- 更新时间：2026-07-10 Asia/Shanghai
+- 当前版本 / 工作包：`v0.4.1 / LOCAL-8899-RELEASE`
+- 最近完成：v0.4.1 代码、迁移、自动化测试和发布指导文档已完成。
+- 正在执行或准备执行的命令：检查 8899/systemd/GitHub 状态；备份 `data/`；运行 preflight；更新并重启现有 8899 服务；执行 health/login/bootstrap/jobs/scheduler/Web/网关冒烟；随后 commit、push、annotated tag、GitHub Release，并检查资产、CI 和 GHCR。
+- 已通过验证：上一轮 `go test ./...`、`go vet ./...`、race、preflight、前端语法和交叉编译。
+- 当前阻塞：尚未审计本机服务状态、GitHub 凭据与发布工作流。
+- 唯一下一步：读取当前 8899 进程、systemd、Git remote、GitHub CLI 和发布工作流状态。
+
+- 断点更新：现有 8899 服务为 PID `407867` 直接运行 `/root/ProxyLiteChecker/bin/proxylite`，无 `proxylite.service`；Git remote 为 `git@github-proxylitechecker:RY-zzcn/ProxyLiteChecker.git`；SSH 远端读取可用；本机无 `gh`；tag push 会触发 `.github/workflows/release.yml` 自动创建六平台二进制、源码包和 `SHA256SUMS`，Docker workflow 负责 GHCR。
+- 正在执行或准备执行的命令：`./scripts/backup_data.sh`；`./scripts/preflight_check.sh`；构建 `bin/proxylite`；停止 PID 407867；以现有 `.env` 在 8899 原地启动新二进制；执行 curl/API/Web/网关冒烟。
+- 当前阻塞：无；发布确认将使用 GitHub Actions/API，因为本机未安装 `gh`。
+- 唯一下一步：完成数据备份和 preflight。
+
+- 断点更新：备份已生成 `backups/proxylite-data-20260710-143108.tar.gz`；`./scripts/preflight_check.sh` 通过。重启前 `/health` 显示运行版本为 `0.3.3`，旧进程可执行文件已显示 `(deleted)`；仓库无 `.env`，将继续使用现有默认环境语义。
+- 正在执行或准备执行的命令：停止 PID 407867；使用 `systemd-run --user --unit=proxylite --collect --working-directory=/root/ProxyLiteChecker ./scripts/start.sh` 在原 8899 端口启动 v0.4.1。
+- 当前阻塞：无。
+- 唯一下一步：停止旧进程并确认 8899 端口释放。
+
+- 断点更新：停止 PID 407867 后，宿主现有机制自动在同一 8899 端口拉起 PID `868716`；新进程直接使用当前 `bin/proxylite`，`GET /health` 返回版本 `0.4.1`。未创建第二个部署或备用端口。
+- 正在执行或准备执行的命令：在 `127.0.0.1:8899` 执行登录、bootstrap、jobs、scheduler、Web 静态资源和 gateway status 冒烟；检查 SQLite schema `401001`、完整性和网关监听端口。
+- 当前阻塞：无。
+- 唯一下一步：完成 8899 登录与认证 API 冒烟。
+
+- 断点更新：8899 登录成功；bootstrap 返回 app `0.4.1`、18,694 个代理、schema 401001 调度状态和最近 maintenance job；jobs/scheduler/target-profiles/proxies API 通过；8899 与 18080-18089 全部监听；Grok HTTP 18084 和 SOCKS5 18085 实际请求均返回 HTTP 200；SQLite 外键检查无输出且完整性 `ok`。
+- 浏览器冒烟：首次 headless Chromium 因 `/tmp` tmpfs 97% 占用报 `No space left on device`，属于环境阻塞。
+- 正在执行或准备执行的命令：仅删除 `/tmp` 中旧 Chromium profile/component cache 和残留 `go-build*` 临时目录，然后重新运行 8899 headless Web 冒烟。
+- 当前阻塞：临时目录空间不足，预计清理后解除。
+- 唯一下一步：清理明确的 `/tmp` 临时缓存并重试 Chromium。
+
+- 断点更新：已清理明确的旧 Chromium profile 和 Go build 临时缓存，`/tmp` 使用率从 97% 降至 55%；在宿主环境对现有 `127.0.0.1:8899` 执行 headless Chromium 冒烟成功，完整 DOM 返回并确认页面版本 `v0.4.1`、任务/调度及新增设置控件均已加载。
+- 正在执行或准备执行的命令：`git diff --check`、`./scripts/preflight_check.sh` 和最终 Git 状态审计；全部通过后提交 `main`、推送并创建 annotated `v0.4.1` tag。
+- 当前阻塞：无。
+- 唯一下一步：完成最终本地检查并提交 v0.4.1。
+
+- 断点更新：`git diff --check` 与 `./scripts/preflight_check.sh` 最终门禁通过；现有 8899 部署的 health、认证 API、Web、SQLite 和 HTTP/SOCKS5 网关验收全部完成。提交范围已审计，未包含运行数据、备份或临时浏览器目录。
+- 正在执行或准备执行的命令：提交当前 v0.4.0/v0.4.1 累积实现和文档，推送 `main`，创建并推送 annotated `v0.4.1` tag。
+- 当前阻塞：无。
+- 唯一下一步：创建 v0.4.1 发布提交并推送 GitHub。

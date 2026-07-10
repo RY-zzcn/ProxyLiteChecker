@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+## 0.4.1 - 2026-07-10
+
+- Persist job history, parameters, progress, terminal results, errors, parent relationships, and process instance IDs in SQLite with restart-safe autoincrement IDs.
+- Mark jobs left active by a previous process as `interrupted`, preserve their history, and schedule at most one recovery catch-up.
+- Add a single heavy-work coordinator that keeps cancellation slots until worker acknowledgement, merges duplicate automatic intents, and alternates fetch/check grants to prevent starvation.
+- Persist scheduler due times, completion outcomes, pending reasons, backoff state, failure counters, and last job IDs; calculate future runs from actual terminal outcomes.
+- Add target low-stock settings that check existing candidates before fetching and optionally create a parented check pipeline only when a fetch adds proxies.
+- Add job history and scheduler status APIs, recent persistent jobs in bootstrap, and Web UI support for `cancelling`, `interrupted`, blocking jobs, pending reasons, and backoff.
+- Add migration, restart recovery, progress throttling, terminal persistence, history pagination, cancellation-slot, fairness, low-stock, pipeline, fake-clock, API, and scheduler backoff tests.
+
+## 0.4.0 - 2026-07-10
+
+- Add explicit, transactional schema migrations with Beijing-time migration records and startup schema-version logging.
+- Split proxy identity from authoritative `proxy_probe_state` and `proxy_target_state` records while retaining legacy quality columns and `proxy_checks` as rollback shadows.
+- Backfill v0.3.4 data without losing proxy identities, preserve base-only capability for diagnostics, and strictly reclassify named-target base-only records as unavailable.
+- Make target lists, exports, gateway pools, low-stock counts, deletion, TTL transitions, and global availability statistics read the correct probe or target state dimension.
+- Add nested probe, target state, and target summary fields to proxy responses; distinguish transport availability from unique target availability in statistics and the Web console.
+- Track probe and target status transition times independently, require repeated base failures for periodic cleanup, and record probe/target requeue maintenance separately.
+- Add migration idempotency, real v0.3.4 database, atomic state write, strict capability, independent lifecycle, gateway/export authority, and cross-target isolation coverage.
+- Add a canonical project handoff document, the v0.4.0-v0.4.2 roadmap, and a repository-level resume protocol; remove superseded planning documents.
+
 ## 0.3.4 - 2026-07-10
 
 - Require named target profiles to reach their Web or API endpoint before they enter target exports and gateway pools; retain base-only capability for diagnostics without treating it as target availability.
