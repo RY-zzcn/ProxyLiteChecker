@@ -1,7 +1,7 @@
 # ProxyLiteChecker v0.4.3 一键部署路线图
 
-- 状态：实现与本机 8899 验收完成，GitHub 发布中
-- 当前工作包：`GITHUB-RELEASE`
+- 状态：已完成并发布
+- 当前工作包：`COMPLETE`
 - 基线版本：`v0.4.2`
 - 目标版本：`v0.4.3`
 - 主题：最小化的一键部署与完整 README 更新
@@ -31,7 +31,7 @@
 - [x] 更新 preflight，使其检查一键部署脚本语法与帮助入口。
 - [x] 完成 `bash -n`、帮助/参数错误测试、全量 Go test/vet/race、preflight、交叉编译和差异检查。
 - [x] 仅更新现有 `127.0.0.1:8899` 部署并完成 v0.4.3 health、登录/bootstrap 和 Web 冒烟。
-- [ ] 创建发布提交、推送 main、annotated `v0.4.3` tag、GitHub Release、8 个资产和 GHCR amd64/arm64。
+- [x] 创建发布提交、推送 main、annotated `v0.4.3` tag、GitHub Release、8 个资产和 GHCR amd64/arm64。
 
 ## 4. 实时断点
 
@@ -66,3 +66,25 @@
 - 正在执行或准备执行的命令：`git add`、创建 v0.4.3 发布提交并推送 main。
 - 当前阻塞：无。
 - 唯一下一步：发布提交推送后创建并推送 annotated `v0.4.3` tag。
+
+- 断点更新：v0.4.3 发布提交 `1a29ce6` 已创建并推送到 GitHub main。
+- 正在执行或准备执行的命令：创建并推送 annotated `v0.4.3` tag，随后监控 CI、Release 和 Docker 工作流。
+- 当前阻塞：无。
+- 唯一下一步：推送 `v0.4.3` tag 触发正式发布。
+
+- 断点更新：annotated `v0.4.3` tag 已指向 `1a29ce6ce14f8d144095a5f047062414c06aa6ad` 并推送成功。
+- 正在执行或准备执行的命令：轮询 GitHub Actions；核验 Release 8 个资产、源码包中的可执行安装脚本、raw README 一键命令和 GHCR amd64/arm64 manifest。
+- 当前阻塞：无，等待远端工作流完成。
+- 唯一下一步：取得 CI、Release 与 Docker 全部成功终态。
+
+- 断点更新：CI `29089408339` 与 Release `29089465901` 已成功；v0.4.3 Release 已公开，8 个资产全部 uploaded。实际下载源码包确认 `scripts/install.sh` 权限为可执行，GitHub raw 脚本 `--help` 可运行；核验后下载包已删除。
+- 正在执行或准备执行的命令：继续轮询 main Docker `29089408369` 与 tag Docker `29089465871`，成功后核验 GHCR `v0.4.3` amd64/arm64 manifest。
+- 当前阻塞：无，等待 Docker 工作流完成。
+- 唯一下一步：取得 Docker 成功终态并核验镜像清单。
+
+- 断点更新：main Docker `29089408369` 与 tag Docker `29089465871` 均成功，四条发布 Actions 全部完成。GHCR `v0.4.3` 为 OCI multi-arch index，摘要 `sha256:074b5da4c2c5aeb84412d9130d6789817ba38786c3b2517ad41d8a857c7ab19f`，包含 `linux/amd64` 和 `linux/arm64`。
+- 发布结果：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.3>；发布提交 `1a29ce6`；annotated tag `v0.4.3`；8 个资产全部 uploaded；GitHub README 已完整更新。
+- 当前工作包：`COMPLETE`。
+- 正在执行或准备执行的命令：提交并推送发布后完成记录，确认 post-release CI/Docker 和工作区干净。
+- 当前阻塞：无。
+- 唯一下一步：完成发布后文档提交；之后等待用户制定下一路线。

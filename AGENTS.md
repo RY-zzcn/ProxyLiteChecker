@@ -33,13 +33,14 @@ or asks for the next version, read these files before changing code:
 
 The current canonical sequence is:
 
-- released: `v0.4.2`, containing the state model, persistent scheduler,
+- released: `v0.4.3`, containing the state model, persistent scheduler,
   proxy-first checking, cached GeoIP enrichment, aggregate stats, lock-free
-  gateway refresh, and frontend polling reduction
-- current implementation and mandatory publication stage: `v0.4.3` one-command
-  Linux deployment using GitHub Release binaries or formal GHCR images
-- no later version may start until v0.4.3 passes the existing 8899 acceptance and
-  completes commit, push, annotated tag, GitHub Release, assets, CI, and GHCR
+  gateway refresh, frontend polling reduction, and one-command Linux deployment
+- current implementation stage: none; follow `docs/PROJECT_HANDOFF.md` and wait
+  for an explicit user-defined next route
+- no later version may start implicitly; every new stage must still complete the
+  existing 8899 acceptance, commit, push, annotated tag, GitHub Release, assets,
+  CI, and GHCR workflow
 
 Code, tests, CHANGELOG, release tags, the handoff document, and then the current
 roadmap are the truth order. Superseded design and progress documents have been
