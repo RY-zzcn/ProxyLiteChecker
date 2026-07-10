@@ -39,6 +39,8 @@ const BEIJING_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
   hourCycle: "h23",
 });
+const NUMBER_FORMATTER = new Intl.NumberFormat("zh-CN");
+const THEME_STORAGE_KEY = "plc_theme";
 
 const el = (id) => document.getElementById(id);
 
@@ -70,6 +72,61 @@ function durationText(milliseconds) {
   if (value < 1000) return `${value} ms`;
   if (value < 60000) return `${Math.round(value / 1000)} 秒`;
   return `${Math.round(value / 60000)} 分钟`;
+}
+
+function formatNumber(value) {
+  return NUMBER_FORMATTER.format(Number(value || 0));
+}
+
+function applyTheme(theme, persist = false) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  if (persist) localStorage.setItem(THEME_STORAGE_KEY, next);
+  const button = el("themeToggle");
+  if (button) {
+    const dark = next === "dark";
+    button.textContent = dark ? "浅色" : "深色";
+    button.setAttribute("aria-label", dark ? "切换浅色主题" : "切换深色主题");
+    button.setAttribute("aria-pressed", String(dark));
+  }
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+  if (themeColor) themeColor.content = next === "dark" ? "#0b1220" : "#f4f7fb";
+}
+
+function initializeInterface() {
+  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+  const current = stored || document.documentElement.dataset.theme || "light";
+  applyTheme(current);
+  if (window.matchMedia("(max-width: 900px)").matches) {
+    document.querySelectorAll(".settings-group").forEach((group) => group.removeAttribute("open"));
+  }
+  setupSectionNavigation();
+}
+
+function setupSectionNavigation() {
+  const links = [...document.querySelectorAll("[data-section-link]")];
+  const sections = links.map((link) => document.getElementById(link.dataset.sectionLink)).filter(Boolean);
+  if (!links.length || !sections.length || !("IntersectionObserver" in window)) return;
+  const activate = (id) => {
+    links.forEach((link) => {
+      const active = link.dataset.sectionLink === id;
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+  };
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible) activate(visible.target.id);
+    },
+    { rootMargin: "-15% 0px -75% 0px", threshold: [0, 0.05, 0.2] },
+  );
+  sections.forEach((section) => observer.observe(section));
+  links.forEach((link) => link.addEventListener("click", () => activate(link.dataset.sectionLink)));
+  activate(sections[0].id);
 }
 
 async function api(path, options = {}) {
@@ -278,6 +335,7 @@ function toast(message, type = "info") {
   const host = el("toastHost");
   const item = document.createElement("div");
   item.className = `toast ${type}`;
+  item.setAttribute("role", type === "error" ? "alert" : "status");
   item.textContent = message;
   host.appendChild(item);
   setTimeout(() => item.remove(), 3200);
@@ -290,6 +348,7 @@ function setBusy(button, busy, label) {
   }
   button.classList.toggle("is-loading", busy);
   button.disabled = busy;
+  button.setAttribute("aria-busy", String(busy));
   if (busy) {
     button.textContent = label || "处理中";
   } else {
@@ -353,10 +412,10 @@ async function bootstrap() {
 
 function renderStats(stats) {
   state.stats = stats || {};
-  el("statTotal").textContent = stats.total || 0;
-  el("statAvailable").textContent = stats.available || 0;
-  el("statUntested").textContent = stats.untested || 0;
-  el("statFailed").textContent = stats.failed || 0;
+  el("statTotal").textContent = formatNumber(stats.total);
+  el("statAvailable").textContent = formatNumber(stats.available);
+  el("statUntested").textContent = formatNumber(stats.untested);
+  el("statFailed").textContent = formatNumber(stats.failed);
   const targetText = (stats.by_target || [])
     .filter((item) => Number(item.available || 0) > 0)
     .map((item) => `${targetLabel(item.target_profile)} ${Number(item.available || 0)}`)
@@ -761,6 +820,8 @@ function renderJobs(jobs) {
     el("taskSubtitle").textContent = "空闲";
     el("jobMessage").textContent = "等待操作";
     el("progressBar").style.width = "0%";
+    el("jobProgress").setAttribute("aria-valuenow", "0");
+    el("jobProgress").setAttribute("aria-valuetext", "空闲");
     el("cancelJobBtn").disabled = true;
     return;
   }
@@ -780,6 +841,8 @@ function renderJobs(jobs) {
   el("taskSubtitle").textContent = `${typeText} · ${statusText} · ${job.done}/${job.total}`;
   el("jobMessage").textContent = `${job.message || ""} ${percent}%`;
   el("progressBar").style.width = `${percent}%`;
+  el("jobProgress").setAttribute("aria-valuenow", String(percent));
+  el("jobProgress").setAttribute("aria-valuetext", `${typeText}${statusText}，${percent}%`);
   el("cancelJobBtn").disabled = job.status !== "running";
 }
 
@@ -835,20 +898,20 @@ async function loadProxies() {
   state.proxies.total = payload.total || rows.length;
   state.proxies.limit = payload.limit || state.proxies.limit;
   state.proxies.offset = payload.offset || 0;
-  el("proxyTableSummary").textContent = `${state.proxies.total} 条记录`;
+  el("proxyTableSummary").textContent = `${formatNumber(state.proxies.total)} 条记录`;
   el("proxyRows").innerHTML =
     rows
       .map(
         (item) => `
           <tr>
-            <td class="proxy-cell" title="${escapeHtml(proxyUrl(item))}">${escapeHtml(proxyUrl(item))}</td>
-            <td>${statusTag(item.status)}${item.failure_reason ? `<span class="reason-tag">${escapeHtml(item.failure_reason)}</span>` : ""}</td>
-            <td>${escapeHtml(item.grade || "-")}</td>
-            <td>${item.latency_ms == null ? "-" : `${item.latency_ms} ms`}</td>
-            <td>${escapeHtml(item.exit_ip || "-")} ${proxyGeoLabel(item) ? `<span class="muted">${escapeHtml(proxyGeoLabel(item))}</span>` : ""}</td>
-            <td>${escapeHtml(item.recommended_use || "-")}</td>
-            <td>${escapeHtml(item.source || "-")}</td>
-            <td>${escapeHtml(displayTimestamp(item.last_checked_at || item.updated_at))}</td>
+            <td data-label="代理" class="proxy-cell" title="${escapeHtml(proxyUrl(item))}">${escapeHtml(proxyUrl(item))}</td>
+            <td data-label="状态">${statusTag(item.status)}${item.failure_reason ? `<span class="reason-tag">${escapeHtml(item.failure_reason)}</span>` : ""}</td>
+            <td data-label="等级">${escapeHtml(item.grade || "-")}</td>
+            <td data-label="延迟">${item.latency_ms == null ? "-" : `${item.latency_ms} ms`}</td>
+            <td data-label="出口">${escapeHtml(item.exit_ip || "-")} ${proxyGeoLabel(item) ? `<span class="muted">${escapeHtml(proxyGeoLabel(item))}</span>` : ""}</td>
+            <td data-label="用途">${escapeHtml(item.recommended_use || "-")}</td>
+            <td data-label="来源">${escapeHtml(item.source || "-")}</td>
+            <td data-label="更新时间">${escapeHtml(displayTimestamp(item.last_checked_at || item.updated_at))}</td>
           </tr>
         `,
       )
@@ -864,7 +927,7 @@ function renderProxyPager(rowCount) {
   const pages = Math.max(1, Math.ceil(total / limit));
   const start = total === 0 ? 0 : offset + 1;
   const end = Math.min(offset + rowCount, total);
-  el("proxyPageText").textContent = `${start}-${end} / ${total} · 第 ${page}/${pages} 页`;
+  el("proxyPageText").textContent = `${formatNumber(start)}-${formatNumber(end)} / ${formatNumber(total)} · 第 ${formatNumber(page)}/${formatNumber(pages)} 页`;
   el("prevProxyPage").disabled = offset <= 0;
   el("nextProxyPage").disabled = offset + limit >= total;
 }
@@ -1198,6 +1261,9 @@ function bindEvents() {
     resumeVisiblePolling();
   });
   el("loginForm").addEventListener("submit", login);
+  el("themeToggle").addEventListener("click", () => {
+    applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark", true);
+  });
   el("logoutBtn").addEventListener("click", () => {
     localStorage.removeItem("plc_token");
     state.token = "";
@@ -1277,6 +1343,7 @@ function debounce(fn, wait) {
   };
 }
 
+initializeInterface();
 bindEvents();
 if (state.token) {
   bootstrap().catch(() => showLogin());

@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scrip
 部署指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.3
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.4
 ```
 
 ## 升级
@@ -137,6 +137,7 @@ sudo docker compose logs -f
 - 任务历史、调度时间、失败退避和重启中断状态持久化。
 - 提供按目标和国家筛选的 TXT/JSON 导出。
 - 每个目标提供固定 HTTP/SOCKS5 本机网关，支持 EWMA、隔离、half-open 和降级选路。
+- 原生 Web 控制台支持浅色/深色主题、区域导航、可折叠自动化设置和移动端代理卡片。
 
 ## 默认端口
 
@@ -233,7 +234,7 @@ docker run -d --name proxylitechecker \
   -e SECRET_KEY='请改成强随机字符串' \
   -e PLC_REQUIRE_SECURE=1 \
   -v proxylite-data:/app/data \
-  ghcr.io/ry-zzcn/proxylitechecker:v0.4.3
+  ghcr.io/ry-zzcn/proxylitechecker:v0.4.4
 ```
 
 ## 手动下载二进制
@@ -283,4 +284,5 @@ go build -o bin/proxylite ./cmd/proxylite
 - [部署、备份和回滚](docs/deployment.md)
 - [项目接手与实时进度](docs/PROJECT_HANDOFF.md)
 - [v0.4.3 一键部署路线图](docs/ROADMAP_V0.4.3.md)
+- [v0.4.4 前端 UI 优化路线图](docs/ROADMAP_V0.4.4.md)
 - [更新记录](CHANGELOG.md)

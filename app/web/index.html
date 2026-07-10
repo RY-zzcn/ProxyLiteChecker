@@ -3,20 +3,31 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f7fb" />
     <title>ProxyLiteChecker</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      (() => {
+        const saved = localStorage.getItem("plc_theme");
+        const theme = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#mainContent">跳到主内容</a>
     <main id="loginView" class="login-view" hidden>
       <form id="loginForm" class="login-panel">
         <div class="login-brand">
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
+            <span class="brand-eyebrow">LOCAL PROXY OPS</span>
             <h1>ProxyLiteChecker</h1>
-            <p>额丶Y · 单机代理池</p>
+            <p>单机代理检测、维护与目标网关</p>
           </div>
         </div>
+        <p class="login-copy">登录后管理代理源、检测任务、自动维护和本机网关。</p>
         <label>
           用户名
           <input id="username" autocomplete="username" value="admin" />
@@ -26,7 +37,7 @@
           <input id="password" type="password" autocomplete="current-password" />
         </label>
         <button type="submit" data-label="登录">登录</button>
-        <div id="loginError" class="error-text"></div>
+        <div id="loginError" class="error-text" role="alert"></div>
       </form>
     </main>
 
@@ -35,59 +46,91 @@
         <div class="brand">
           <img class="brand-icon" src="/static/proxylite-icon.svg" alt="" />
           <div>
+            <span class="brand-eyebrow">LOCAL PROXY OPS</span>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.4.3</span> · 额丶Y</small>
+            <small><span id="versionText">v0.4.4</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
           <a class="repo-link" href="https://github.com/RY-zzcn/ProxyLiteChecker" target="_blank" rel="noreferrer">GitHub</a>
           <span id="gatewayPill" class="status-pill">网关未连接</span>
+          <button id="themeToggle" class="ghost theme-toggle" type="button" aria-label="切换深色主题" aria-pressed="false">深色</button>
           <button id="refreshBtn" class="secondary" data-label="刷新">刷新</button>
           <button id="logoutBtn" class="ghost" data-label="退出">退出</button>
         </div>
       </header>
 
-      <section class="metric-grid" aria-label="代理统计">
+      <nav class="workspace-nav" aria-label="页面区域">
+        <a href="#overview" data-section-link="overview">概览</a>
+        <a href="#operations" data-section-link="operations">操作</a>
+        <a href="#automation" data-section-link="automation">自动化</a>
+        <a href="#gateway" data-section-link="gateway">网关</a>
+        <a href="#repository" data-section-link="repository">仓库</a>
+      </nav>
+
+      <div id="mainContent" tabindex="-1">
+      <section id="overview" class="metric-grid page-section" aria-label="代理统计">
         <article class="metric">
-          <span>总数</span>
+          <div class="metric-head">
+            <span>代理总数</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 7h14M7 12h10M9 17h6" /></svg>
+          </div>
           <strong id="statTotal">0</strong>
+          <small>当前仓库身份记录</small>
         </article>
         <article class="metric success">
-          <span>目标唯一可用</span>
+          <div class="metric-head">
+            <span>目标唯一可用</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
+          </div>
           <strong id="statAvailable">0</strong>
+          <small>至少一个目标可使用</small>
         </article>
         <article class="metric warning">
-          <span>基础待检</span>
+          <div class="metric-head">
+            <span>基础待检</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 8v5l3 2" /></svg>
+          </div>
           <strong id="statUntested">0</strong>
+          <small>等待本机链路验证</small>
         </article>
         <article class="metric danger">
-          <span>基础失败</span>
+          <div class="metric-head">
+            <span>基础失败</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 4 3 20h18L12 4Z" /><path d="M12 9v4m0 3h.01" /></svg>
+          </div>
           <strong id="statFailed">0</strong>
+          <small>基础代理链路不可用</small>
         </article>
       </section>
 
-      <section class="top-workspace">
+      <section id="operations" class="top-workspace page-section">
         <section class="panel action-panel">
           <div class="panel-head">
             <div>
+              <span class="section-eyebrow">OPERATIONS</span>
               <h2>快速操作</h2>
               <p id="sourceCountText">0 个代理源</p>
             </div>
           </div>
           <div class="quick-action-grid">
             <button id="fetchSourcesBtn" class="action-button accent" data-label="拉取代理源">
+              <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" /></svg></span>
               <strong>拉取代理源</strong>
               <span>选中源导入本地仓库</span>
             </button>
             <button id="runCheckBtn" class="action-button accent" data-label="本机检测">
+              <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h3l2-5 4 10 2-5h5" /></svg></span>
               <strong>本机检测</strong>
               <span>按下方参数执行</span>
             </button>
             <a id="exportTxtLink" class="action-button link" href="/api/export/proxies.txt" target="_blank">
+              <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7V3Z" /><path d="M14 3v5h5M10 13h5m-5 4h5" /></svg></span>
               <strong>TXT 导出</strong>
               <span>按导出目标输出</span>
             </a>
             <a id="exportJsonLink" class="action-button link" href="/api/export/proxies.json" target="_blank">
+              <span class="action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 4H5v16h3m8-16h3v16h-3M10 9l-2 3 2 3m4-6 2 3-2 3" /></svg></span>
               <strong>JSON 导出</strong>
               <span>包含目标元数据</span>
             </a>
@@ -134,15 +177,16 @@
         <section class="panel task-panel">
           <div class="panel-head">
             <div>
+              <span class="section-eyebrow">LIVE JOB</span>
               <h2>实时任务</h2>
               <p id="taskSubtitle">空闲</p>
             </div>
             <button id="cancelJobBtn" class="secondary" data-label="停止" disabled>停止</button>
           </div>
-          <div class="progress">
+          <div id="jobProgress" class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
             <span id="progressBar"></span>
           </div>
-          <div id="jobMessage" class="job-message">等待操作</div>
+          <div id="jobMessage" class="job-message" aria-live="polite">等待操作</div>
         </section>
       </section>
 
@@ -150,6 +194,7 @@
         <section class="panel sources-panel">
           <div class="panel-head wrap">
             <div>
+              <span class="section-eyebrow">SOURCES</span>
               <h2>代理源</h2>
               <p id="selectedSourcesText">已选 0 个</p>
             </div>
@@ -168,28 +213,30 @@
         <section class="panel import-panel">
           <div class="panel-head">
             <div>
+              <span class="section-eyebrow">MANUAL INPUT</span>
               <h2>手动导入</h2>
               <p id="importResult">等待输入</p>
             </div>
             <button id="importBtn" data-label="导入">导入</button>
           </div>
-          <textarea id="importText" spellcheck="false" placeholder="http://1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;9.9.9.9:3128"></textarea>
+          <textarea id="importText" aria-label="代理文本" spellcheck="false" placeholder="http://1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;9.9.9.9:3128"></textarea>
         </section>
 
-        <section class="panel settings-panel">
+        <section id="automation" class="panel settings-panel page-section">
           <div class="panel-head">
             <div>
+              <span class="section-eyebrow">AUTOMATION</span>
               <h2>自动任务与设置</h2>
               <p id="schedulerText">自动任务未启用</p>
             </div>
             <button id="saveSettingsBtn" data-label="保存">保存</button>
           </div>
           <div class="settings-stack">
-            <section class="settings-group fetch-group">
-              <div class="settings-group-head">
-                <strong>自动拉取</strong>
-                <span>定时补源与低库存补源</span>
-              </div>
+            <details class="settings-group fetch-group" open>
+              <summary class="settings-group-head">
+                <span class="settings-title"><strong>自动拉取</strong><span>定时补源与低库存补源</span></span>
+                <span class="disclosure-icon" aria-hidden="true"></span>
+              </summary>
               <div class="settings-group-body">
                 <label class="switch-row">
                   <input id="autoFetchEnabled" type="checkbox" />
@@ -226,13 +273,13 @@
                   </label>
                 </div>
               </div>
-            </section>
+            </details>
 
-            <section class="settings-group check-group">
-              <div class="settings-group-head">
-                <strong>自动检测</strong>
-                <span>范围、目标和性能参数</span>
-              </div>
+            <details class="settings-group check-group" open>
+              <summary class="settings-group-head">
+                <span class="settings-title"><strong>自动检测</strong><span>范围、目标和性能参数</span></span>
+                <span class="disclosure-icon" aria-hidden="true"></span>
+              </summary>
               <div class="settings-group-body">
                 <label class="switch-row">
                   <input id="autoCheckEnabled" type="checkbox" />
@@ -316,13 +363,13 @@
                   </label>
                 </div>
               </div>
-            </section>
+            </details>
 
-            <section class="settings-group maintenance-group">
-              <div class="settings-group-head">
-                <strong>维护与列表</strong>
-                <span>清理策略和仓库显示</span>
-              </div>
+            <details class="settings-group maintenance-group" open>
+              <summary class="settings-group-head">
+                <span class="settings-title"><strong>维护与列表</strong><span>清理策略和仓库显示</span></span>
+                <span class="disclosure-icon" aria-hidden="true"></span>
+              </summary>
               <div class="settings-group-body">
                 <div class="maintenance-grid">
                   <label class="switch-row">
@@ -365,13 +412,13 @@
                   </label>
                 </div>
               </div>
-            </section>
+            </details>
 
-            <section class="settings-group gateway-settings-group">
-              <div class="settings-group-head">
-                <strong>网关运行时</strong>
-                <span>上游选择、重试和隔离策略</span>
-              </div>
+            <details class="settings-group gateway-settings-group" open>
+              <summary class="settings-group-head">
+                <span class="settings-title"><strong>网关运行时</strong><span>上游选择、重试和隔离策略</span></span>
+                <span class="disclosure-icon" aria-hidden="true"></span>
+              </summary>
               <div class="settings-group-body">
                 <div class="mini-grid three">
                   <label>
@@ -429,14 +476,15 @@
                   <button id="geoipUpdateBtn" type="button" class="secondary" data-label="更新">更新</button>
                 </div>
               </div>
-            </section>
+            </details>
           </div>
         </section>
       </section>
 
-      <section class="panel gateway-panel">
+      <section id="gateway" class="panel gateway-panel page-section">
         <div class="section-head">
           <div>
+            <span class="section-eyebrow">TARGET GATEWAYS</span>
             <h2>代理网关</h2>
             <p id="gatewaySummary">每个目标一个固定入口</p>
           </div>
@@ -446,20 +494,21 @@
         <div id="gatewayEvents" class="gateway-events"></div>
       </section>
 
-      <section class="panel proxies-panel">
+      <section id="repository" class="panel proxies-panel page-section">
         <div class="panel-head wrap">
           <div>
+            <span class="section-eyebrow">REPOSITORY</span>
             <h2>代理仓库</h2>
             <p id="proxyTableSummary">0 条记录</p>
           </div>
           <div class="toolbar">
-            <select id="proxyStatus">
+            <select id="proxyStatus" aria-label="代理状态">
               <option value="all">全部</option>
               <option value="available">可用</option>
               <option value="untested">待检</option>
               <option value="failed">失败</option>
             </select>
-            <select id="targetProfile">
+            <select id="targetProfile" aria-label="检测目标">
               <option value="all">全部目标</option>
               <option value="generic">常规</option>
               <option value="openai">OpenAI</option>
@@ -467,13 +516,13 @@
               <option value="gemini">Gemini</option>
               <option value="claude">Claude</option>
             </select>
-            <input id="proxyCountry" placeholder="国家 US / JP" autocomplete="off" />
-            <input id="proxySearch" placeholder="搜索 IP / 来源" />
+            <input id="proxyCountry" aria-label="国家代码" placeholder="国家 US / JP" autocomplete="off" />
+            <input id="proxySearch" aria-label="搜索代理" placeholder="搜索 IP / 来源" />
             <button id="deleteFailedBtn" class="danger secondary" data-label="清理失败">清理失败</button>
           </div>
         </div>
-        <div class="table-wrap proxy-table-viewport">
-          <table>
+        <div class="table-wrap proxy-table-viewport" tabindex="0" aria-label="代理仓库数据表">
+          <table aria-describedby="proxyTableSummary">
             <thead>
               <tr>
                 <th>代理</th>
@@ -499,9 +548,10 @@
       </section>
 
       <footer class="app-footer">
-        <span>作者：额丶Y</span>
+        <span>ProxyLiteChecker · 单机代理运维控制台</span>
         <a href="https://github.com/RY-zzcn/ProxyLiteChecker" target="_blank" rel="noreferrer">github.com/RY-zzcn/ProxyLiteChecker</a>
       </footer>
+      </div>
     </main>
 
     <div id="toastHost" class="toast-host" aria-live="polite"></div>

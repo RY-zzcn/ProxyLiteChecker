@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.4.4 - 2026-07-10
+
+- Redesign the native Web console around a semantic light/dark design system with clearer hierarchy, softer operational surfaces, consistent status colors, and persistent theme selection.
+- Add sticky in-page navigation for overview, operations, automation, gateways, and repository sections without introducing a frontend build chain or external runtime assets.
+- Rework metrics, quick actions, live jobs, source/import panels, gateway cards, diagnostics, filters, pagination, empty states, and feedback states for a cohesive operations-dashboard experience.
+- Convert automation settings to native accessible disclosure groups and collapse them initially on mobile to reduce page length and cognitive load.
+- Replace the mobile proxy table with labeled cards, improve responsive layouts across 375–1440px, and keep page-level horizontal overflow at zero.
+- Add a skip link, visible keyboard focus, progress semantics, toolbar labels, theme ARIA state, screen-reader feedback, touch-friendly controls, tabular numbers, and reduced-motion support.
+
 ## 0.4.3 - 2026-07-10
 
 - Add one interactive Linux deployment script with binary and Docker choices, a fixed `/opt/ProxyLiteChecker` layout, secure first-run credentials, upgrade-safe config/data preservation, and automatic temporary-file cleanup.
