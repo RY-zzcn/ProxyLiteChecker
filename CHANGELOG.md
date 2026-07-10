@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.4 - 2026-07-10
+
+- Require named target profiles to reach their Web or API endpoint before they enter target exports and gateway pools; retain base-only capability for diagnostics without treating it as target availability.
+- Migrate legacy base-only target records to the corrected status model and aggregate global proxy status safely across target checks.
+- Prevent one target failure from deleting a proxy that remains usable for another target, and require complete persisted base failure before automatic immediate deletion.
+- Add `cancel_requested`, `partial`, and reliable terminal job handling so cancellation keeps the heavy-task lock until workers actually stop.
+- Report all-source fetch failure and result-persistence failure accurately instead of displaying every stopped job as successful.
+- Poll concrete job IDs in the Web UI and show distinct completed, partial, failed, and cancelled outcomes without overlapping polling cycles.
+- Add status transition timestamps so requeued proxies receive a full untested TTL, reduce maintenance cadence, and avoid maintenance/check write races.
+- Make low-stock counts target-aware, prioritize scheduled checks before fetches, and preserve schedules when unrelated settings are saved.
+- Add migration, target availability, safe deletion, cancellation, partial-result, lifecycle, and scheduler regression coverage.
+- Add a detailed `v0.3.4` optimization and acceptance plan.
+
 ## 0.3.3 - 2026-07-07
 
 - Restore equal-height dashboard, source/import, task, settings, and gateway panel alignment after the UI polish pass.

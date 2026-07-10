@@ -59,6 +59,7 @@ type CheckResult struct {
 	CloudflareStatus *string `json:"cloudflare_status,omitempty"`
 	RecommendedUse   string  `json:"recommended_use"`
 	LastError        *string `json:"last_error,omitempty"`
+	BaseReachable    bool    `json:"base_reachable"`
 }
 
 type TargetProfile struct {
@@ -78,6 +79,14 @@ type singleCheckResult struct {
 type checkPlan struct {
 	TargetProfile string
 	Items         []ProxyTask
+}
+
+type proxyCheckOutcome struct {
+	Expected      int
+	Seen          int
+	AllFailed     bool
+	BaseReachable bool
+	Persisted     bool
 }
 
 var targetProfileOrder = []string{"generic", "openai", "grok", "gemini", "claude"}
@@ -138,6 +147,11 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 }
 
 func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPlan, cfg CheckConfig) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.jobs.fail(jobID, fmt.Errorf("检测任务异常退出：%v", recovered))
+		}
+	}()
 	total := totalCheckPlanItems(plans)
 	if total == 0 {
 		s.jobs.complete(jobID, "没有符合条件的代理需要检测", map[string]any{"checked": 0})
@@ -146,33 +160,50 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 	done := 0
 	available := 0
 	failed := 0
+	persisted := 0
+	persistenceFailed := 0
 	deletedFailed := 0
-	deletedIDs := map[int]bool{}
+	outcomes := buildProxyCheckOutcomes(plans)
 	for _, plan := range plans {
 		if ctx.Err() != nil {
 			break
 		}
-		items := filterDeletedCheckItems(plan.Items, deletedIDs)
+		items := plan.Items
 		if len(items) == 0 {
 			continue
 		}
 		planCfg := cfg
 		planCfg.TargetProfile = plan.TargetProfile
 		for result := range checkBatchStream(ctx, items, planCfg) {
-			if result.Status == "failed" && planCfg.DeleteFailed {
-				if err := s.store.DeleteProxyByID(result.ProxyID); err != nil {
-					failed++
-				} else {
-					failed++
-					deletedFailed++
-					deletedIDs[result.ProxyID] = true
-				}
-			} else if err := s.store.SaveCheckResult(result); err != nil {
+			outcome := outcomes[result.ProxyID]
+			if outcome == nil {
+				outcome = &proxyCheckOutcome{Expected: 1, AllFailed: true, Persisted: true}
+				outcomes[result.ProxyID] = outcome
+			}
+			outcome.Seen++
+			outcome.BaseReachable = outcome.BaseReachable || result.BaseReachable
+			if result.Status == "available" {
+				outcome.AllFailed = false
+			}
+			if err := s.store.SaveCheckResult(result); err != nil {
 				failed++
+				persistenceFailed++
+				outcome.Persisted = false
 			} else if result.Status == "available" {
 				available++
+				persisted++
 			} else {
 				failed++
+				persisted++
+			}
+			if planCfg.DeleteFailed && shouldDeleteFailedProxy(outcome) {
+				deleted, err := s.store.DeleteProxyIfNoAvailableTargets(result.ProxyID)
+				if err != nil {
+					persistenceFailed++
+					outcome.Persisted = false
+				} else if deleted {
+					deletedFailed++
+				}
 			}
 			done++
 			if done == 1 || done%10 == 0 || done == total {
@@ -190,9 +221,49 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 		s.jobs.finishCancelled(jobID, "本机检测已停止")
 		return
 	}
-	result := map[string]any{"checked": done, "available": available, "failed": failed, "deleted_failed": deletedFailed, "target_profiles": checkPlanProfiles(plans)}
+	result := map[string]any{
+		"checked":            done,
+		"available":          available,
+		"failed":             failed,
+		"persisted":          persisted,
+		"persistence_failed": persistenceFailed,
+		"deleted_failed":     deletedFailed,
+		"target_profiles":    checkPlanProfiles(plans),
+	}
 	s.jobs.Update(jobID, map[string]any{"done": done, "total": total, "success": available, "failed": failed})
-	s.jobs.complete(jobID, checkCompleteMessage(available, failed, deletedFailed, cfg.DeleteFailed), result)
+	s.finalizeCheckJob(jobID, available, failed, persisted, persistenceFailed, deletedFailed, cfg.DeleteFailed, result)
+}
+
+func (s *server) finalizeCheckJob(jobID string, available int, failed int, persisted int, persistenceFailed int, deletedFailed int, deleteFailed bool, result map[string]any) {
+	if persistenceFailed > 0 {
+		message := fmt.Sprintf("检测部分完成：可用 %d，失败 %d，写入异常 %d", available, failed, persistenceFailed)
+		if persisted == 0 {
+			s.jobs.failWithResult(jobID, fmt.Errorf("所有检测结果均未能持久化"), result)
+			return
+		}
+		s.jobs.partial(jobID, message, result)
+		return
+	}
+	s.jobs.complete(jobID, checkCompleteMessage(available, failed, deletedFailed, deleteFailed), result)
+}
+
+func buildProxyCheckOutcomes(plans []checkPlan) map[int]*proxyCheckOutcome {
+	out := map[int]*proxyCheckOutcome{}
+	for _, plan := range plans {
+		for _, item := range plan.Items {
+			state := out[item.ID]
+			if state == nil {
+				state = &proxyCheckOutcome{AllFailed: true, Persisted: true}
+				out[item.ID] = state
+			}
+			state.Expected++
+		}
+	}
+	return out
+}
+
+func shouldDeleteFailedProxy(outcome *proxyCheckOutcome) bool {
+	return outcome != nil && outcome.Seen == outcome.Expected && outcome.AllFailed && !outcome.BaseReachable && outcome.Persisted
 }
 
 func checkProgressMessage(done int, total int, targetProfile string, available int, failed int, deletedFailed int, deleteFailed bool) string {
@@ -451,12 +522,12 @@ func checkWithClient(ctx context.Context, proxyID int, targetProfile string, pro
 		}
 	}
 	successRate := float64(successes) / float64(total)
-	status := "failed"
-	if exitIP != nil || serviceReachable || (apiReachable != nil && *apiReachable) {
-		status = "available"
-	}
-	grade := gradeResult(latency, successRate, serviceReachable, apiReachable)
 	baseReachable := exitIP != nil
+	status := targetAvailabilityStatus(targetProfile, baseReachable, serviceReachable, apiReachable)
+	grade := gradeResult(latency, successRate, serviceReachable, apiReachable)
+	if status == "failed" {
+		grade = "F"
+	}
 	recommended := recommendUse(targetProfile, baseReachable, serviceReachable, apiReachable, status)
 	var lastError *string
 	if status == "failed" {
@@ -484,7 +555,21 @@ func checkWithClient(ctx context.Context, proxyID int, targetProfile string, pro
 		CloudflareStatus: cloudflareStatus,
 		RecommendedUse:   recommended,
 		LastError:        lastError,
+		BaseReachable:    baseReachable,
 	}, BaseReachable: baseReachable}
+}
+
+func targetAvailabilityStatus(profile string, baseReachable bool, serviceReachable bool, apiReachable *bool) string {
+	if normalizeTargetProfile(profile) == "generic" {
+		if baseReachable || serviceReachable {
+			return "available"
+		}
+		return "failed"
+	}
+	if serviceReachable || (apiReachable != nil && *apiReachable) {
+		return "available"
+	}
+	return "failed"
 }
 
 func proxyHTTPClient(proxyURL string, requestTimeout int) (*http.Client, string, error) {
@@ -982,9 +1067,13 @@ func combineRoundResults(profile string, results []singleCheckResult) CheckResul
 		output.SuccessRate = availableRatio
 	}
 	output.Grade = grade
+	if status == "failed" {
+		output.Grade = "F"
+	}
 	output.ServiceReachable = serviceReachable
 	output.APIReachable = apiReachable
 	output.CloudflareStatus = cloudflareStatus
+	output.BaseReachable = baseReachable
 	output.RecommendedUse = recommendUse(profile, baseReachable, serviceReachable, apiReachable, status)
 	if status == "failed" {
 		message := "available_rounds=" + strconv.Itoa(len(available)) + "/" + strconv.Itoa(len(results))
@@ -1070,10 +1159,10 @@ func latencySortValue(value *int) int {
 }
 
 func recommendUse(profile string, baseReachable bool, serviceReachable bool, apiReachable *bool, status string) string {
-	if status != "available" {
-		return "invalid"
-	}
 	if profile == "generic" {
+		if status != "available" {
+			return "invalid"
+		}
 		if baseReachable && serviceReachable {
 			return "generic"
 		}

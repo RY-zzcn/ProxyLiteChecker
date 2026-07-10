@@ -48,7 +48,7 @@ jobs:
             env "${env_args[@]}" go build -o "dist/${name}" ./cmd/proxylite
           done
           tar -czf "dist/proxylitechecker-${GITHUB_REF_NAME}.tar.gz" \
-            README.md CHANGELOG.md .env.example app scripts docker-compose.yml Dockerfile
+            README.md CHANGELOG.md .env.example app docs scripts docker-compose.yml Dockerfile
           cd dist
           sha256sum * > SHA256SUMS
 

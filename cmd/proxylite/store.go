@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS proxies (
   password TEXT,
   source TEXT NOT NULL DEFAULT 'manual',
   status TEXT NOT NULL DEFAULT 'untested',
+  status_changed_at TEXT,
   grade TEXT NOT NULL DEFAULT '',
   latency_ms INTEGER,
   exit_ip TEXT,
@@ -200,6 +201,7 @@ CREATE TABLE IF NOT EXISTS proxy_checks (
   proxy_id INTEGER NOT NULL,
   target_profile TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'untested',
+  status_changed_at TEXT,
   grade TEXT NOT NULL DEFAULT '',
   latency_ms INTEGER,
   exit_ip TEXT,
@@ -262,6 +264,9 @@ WHERE last_checked_at IS NOT NULL AND target_profile != '';
 	if err := s.addMissingColumns(); err != nil {
 		return err
 	}
+	if err := s.normalizeStoredProxyState(); err != nil {
+		return err
+	}
 	username := firstNonEmpty(adminUsername, "admin")
 	var count int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&count); err != nil {
@@ -281,16 +286,18 @@ WHERE last_checked_at IS NOT NULL AND target_profile != '';
 func (s *store) addMissingColumns() error {
 	additions := map[string]map[string]string{
 		"proxies": {
-			"country_name":   "TEXT",
-			"continent_code": "TEXT",
-			"geo_source":     "TEXT",
-			"geo_updated_at": "TEXT",
+			"country_name":      "TEXT",
+			"continent_code":    "TEXT",
+			"geo_source":        "TEXT",
+			"geo_updated_at":    "TEXT",
+			"status_changed_at": "TEXT",
 		},
 		"proxy_checks": {
-			"country_name":   "TEXT",
-			"continent_code": "TEXT",
-			"geo_source":     "TEXT",
-			"geo_updated_at": "TEXT",
+			"country_name":      "TEXT",
+			"continent_code":    "TEXT",
+			"geo_source":        "TEXT",
+			"geo_updated_at":    "TEXT",
+			"status_changed_at": "TEXT",
 		},
 	}
 	for table, columns := range additions {
@@ -313,6 +320,46 @@ func (s *store) addMissingColumns() error {
 CREATE INDEX IF NOT EXISTS idx_proxies_country ON proxies(country);
 CREATE INDEX IF NOT EXISTS idx_proxy_checks_target_country_status ON proxy_checks(target_profile, country, status);
 `)
+	return err
+}
+
+const proxyAggregateStatusExpression = `(SELECT CASE
+  WHEN SUM(CASE WHEN c.status = 'available' THEN 1 ELSE 0 END) > 0 THEN 'available'
+  WHEN SUM(CASE WHEN c.status = 'untested' THEN 1 ELSE 0 END) > 0 THEN 'untested'
+  WHEN COUNT(*) > 0 THEN 'failed'
+  ELSE 'untested'
+END FROM proxy_checks c WHERE c.proxy_id = proxies.id)`
+
+func (s *store) normalizeStoredProxyState() error {
+	if _, err := s.db.Exec(`
+UPDATE proxies
+SET status_changed_at = COALESCE(last_checked_at, updated_at, created_at, datetime('now', '+8 hours'))
+WHERE status_changed_at IS NULL;
+UPDATE proxy_checks
+SET status_changed_at = COALESCE(checked_at, updated_at, datetime('now', '+8 hours'))
+WHERE status_changed_at IS NULL;
+UPDATE proxy_checks
+SET status = 'failed',
+    grade = 'F',
+    recommended_use = CASE WHEN COALESCE(exit_ip, '') != '' THEN 'base' ELSE recommended_use END,
+    last_error = COALESCE(NULLIF(last_error, ''), '[target_unreachable] target service and API unreachable'),
+    status_changed_at = datetime('now', '+8 hours'),
+    updated_at = datetime('now', '+8 hours')
+WHERE target_profile != 'generic'
+  AND status = 'available'
+  AND service_reachable = 0
+  AND COALESCE(api_reachable, 0) = 0;`); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`
+UPDATE proxies
+SET status_changed_at = CASE
+      WHEN status != ` + proxyAggregateStatusExpression + ` THEN datetime('now', '+8 hours')
+      ELSE COALESCE(status_changed_at, last_checked_at, updated_at, created_at, datetime('now', '+8 hours'))
+    END,
+    status = ` + proxyAggregateStatusExpression + `
+WHERE EXISTS (SELECT 1 FROM proxy_checks c WHERE c.proxy_id = proxies.id)
+  AND status != ` + proxyAggregateStatusExpression + `;`)
 	return err
 }
 
@@ -656,8 +703,8 @@ func (s *store) upsertProxy(tx *sql.Tx, proxy parsedProxy, source string) (bool,
 	password := nullableString(proxy.Password)
 	if exists == 0 {
 		_, err := tx.Exec(`
-INSERT INTO proxies (proxy_key, ip, port, protocol, username, password, source, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, 'untested', datetime('now', '+8 hours'), datetime('now', '+8 hours'))`,
+INSERT INTO proxies (proxy_key, ip, port, protocol, username, password, source, status, status_changed_at, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, 'untested', datetime('now', '+8 hours'), datetime('now', '+8 hours'), datetime('now', '+8 hours'))`,
 			key, proxy.Host, proxy.Port, proxy.Protocol, username, password, firstNonEmpty(source, "manual"))
 		return true, err
 	}
@@ -974,10 +1021,30 @@ func (s *store) SaveCheckResult(result CheckResult) error {
 			_ = tx.Rollback()
 		}
 	}()
-	updateResult, err := tx.Exec(`
+	var proxyExists int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM proxies WHERE id = ?", result.ProxyID).Scan(&proxyExists); err != nil {
+		return err
+	}
+	if proxyExists == 0 {
+		return sql.ErrNoRows
+	}
+	preserveRootSnapshot := false
+	if status == "failed" {
+		var otherAvailable int
+		if err := tx.QueryRow(`
+SELECT COUNT(*)
+FROM proxy_checks
+WHERE proxy_id = ?
+  AND target_profile != ?
+  AND status = 'available'`, result.ProxyID, targetProfile).Scan(&otherAvailable); err != nil {
+			return err
+		}
+		preserveRootSnapshot = otherAvailable > 0
+	}
+	if !preserveRootSnapshot {
+		if _, err := tx.Exec(`
 UPDATE proxies
-SET status = ?,
-    grade = ?,
+SET grade = ?,
     latency_ms = ?,
     exit_ip = ?,
     country = ?,
@@ -999,41 +1066,41 @@ SET status = ?,
     updated_at = datetime('now', '+8 hours'),
     last_checked_at = datetime('now', '+8 hours')
 WHERE id = ?`,
-		status,
-		result.Grade,
-		nullableInt(result.LatencyMS),
-		nullableString(result.ExitIP),
-		nullableString(result.Country),
-		nullableString(result.CountryName),
-		nullableString(result.ContinentCode),
-		nullableString(result.IPType),
-		nullableString(result.ASNOrg),
-		nullableString(result.GeoSource),
-		nullableString(result.GeoUpdatedAt),
-		result.SuccessRate,
-		targetProfile,
-		nullableString(result.DetectedProtocol),
-		boolToInt(result.ServiceReachable),
-		apiReachable,
-		nullableString(result.CloudflareStatus),
-		result.RecommendedUse,
-		nullableString(result.LastError),
-		result.ProxyID,
-	)
-	if err != nil {
-		return err
-	}
-	if rows, _ := updateResult.RowsAffected(); rows == 0 {
-		return sql.ErrNoRows
+			result.Grade,
+			nullableInt(result.LatencyMS),
+			nullableString(result.ExitIP),
+			nullableString(result.Country),
+			nullableString(result.CountryName),
+			nullableString(result.ContinentCode),
+			nullableString(result.IPType),
+			nullableString(result.ASNOrg),
+			nullableString(result.GeoSource),
+			nullableString(result.GeoUpdatedAt),
+			result.SuccessRate,
+			targetProfile,
+			nullableString(result.DetectedProtocol),
+			boolToInt(result.ServiceReachable),
+			apiReachable,
+			nullableString(result.CloudflareStatus),
+			result.RecommendedUse,
+			nullableString(result.LastError),
+			result.ProxyID,
+		); err != nil {
+			return err
+		}
 	}
 	_, err = tx.Exec(`
 INSERT INTO proxy_checks (
-  proxy_id, target_profile, status, grade, latency_ms, exit_ip, country, country_name, continent_code, ip_type, asn_org, geo_source, geo_updated_at,
+  proxy_id, target_profile, status, status_changed_at, grade, latency_ms, exit_ip, country, country_name, continent_code, ip_type, asn_org, geo_source, geo_updated_at,
   success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
   recommended_use, last_error, checked_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'), datetime('now', '+8 hours'))
+VALUES (?, ?, ?, datetime('now', '+8 hours'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'), datetime('now', '+8 hours'))
 ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
+  status_changed_at = CASE
+    WHEN proxy_checks.status != excluded.status THEN excluded.status_changed_at
+    ELSE COALESCE(proxy_checks.status_changed_at, excluded.status_changed_at)
+  END,
   status = excluded.status,
   grade = excluded.grade,
   latency_ms = excluded.latency_ms,
@@ -1078,6 +1145,9 @@ ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
 	if err != nil {
 		return err
 	}
+	if err := syncProxyAggregateStatusTx(tx, result.ProxyID); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -1085,13 +1155,62 @@ ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
 	return nil
 }
 
-func (s *store) DeleteProxyByID(id int) error {
-	_, err := s.db.Exec("DELETE FROM proxies WHERE id = ?", id)
+func syncProxyAggregateStatusTx(tx *sql.Tx, proxyID int) error {
+	_, err := tx.Exec(`
+UPDATE proxies
+SET status_changed_at = CASE
+      WHEN status != `+proxyAggregateStatusExpression+` THEN datetime('now', '+8 hours')
+      ELSE COALESCE(status_changed_at, last_checked_at, updated_at, created_at, datetime('now', '+8 hours'))
+    END,
+    status = `+proxyAggregateStatusExpression+`
+WHERE id = ?`, proxyID)
 	return err
 }
 
+func syncAllProxyAggregateStatusesTx(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+UPDATE proxies
+SET status_changed_at = CASE
+      WHEN status != ` + proxyAggregateStatusExpression + ` THEN datetime('now', '+8 hours')
+      ELSE COALESCE(status_changed_at, last_checked_at, updated_at, created_at, datetime('now', '+8 hours'))
+    END,
+    status = ` + proxyAggregateStatusExpression + `
+WHERE EXISTS (SELECT 1 FROM proxy_checks c WHERE c.proxy_id = proxies.id)
+  AND status != ` + proxyAggregateStatusExpression + `;`)
+	return err
+}
+
+func (s *store) DeleteProxyIfNoAvailableTargets(id int) (bool, error) {
+	result, err := s.db.Exec(`
+DELETE FROM proxies
+WHERE id = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM proxy_checks c
+    WHERE c.proxy_id = proxies.id
+      AND c.status = 'available'
+  )`, id)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
 func (s *store) DeleteFailedProxies() (int64, error) {
-	result, err := s.db.Exec("DELETE FROM proxies WHERE status = 'failed'")
+	result, err := s.db.Exec(`
+DELETE FROM proxies
+WHERE enabled = 1
+  AND EXISTS (
+    SELECT 1 FROM proxy_checks c
+    WHERE c.proxy_id = proxies.id
+      AND c.target_profile = 'generic'
+      AND c.status = 'failed'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM proxy_checks c
+    WHERE c.proxy_id = proxies.id
+      AND c.status = 'available'
+  )`)
 	if err != nil {
 		return 0, err
 	}
@@ -1104,7 +1223,7 @@ func (s *store) DeleteExpiredUntested(ttlHours int) (int64, error) {
 DELETE FROM proxies
 WHERE enabled = 1
   AND status = 'untested'
-  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', '+8 hours', ?)`,
+  AND COALESCE(status_changed_at, updated_at, created_at) <= datetime('now', '+8 hours', ?)`,
 		fmt.Sprintf("-%d hours", ttlHours),
 	)
 	if err != nil {
@@ -1115,38 +1234,89 @@ WHERE enabled = 1
 
 func (s *store) RequeueExpiredAvailable(ttlHours int) (int64, error) {
 	ttlHours = clampInt(ttlHours, 1, 8760)
-	targetResult, err := s.db.Exec(`
+	modifier := fmt.Sprintf("-%d hours", ttlHours)
+	var affected int64
+	if err := s.db.QueryRow(`
+SELECT COUNT(*) FROM (
+  SELECT proxy_id AS id
+  FROM proxy_checks
+  WHERE status = 'available'
+    AND COALESCE(checked_at, updated_at) <= datetime('now', '+8 hours', ?)
+  UNION
+  SELECT id
+  FROM proxies
+  WHERE enabled = 1
+    AND status = 'available'
+    AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', '+8 hours', ?)
+    AND NOT EXISTS (SELECT 1 FROM proxy_checks c WHERE c.proxy_id = proxies.id)
+)`, modifier, modifier).Scan(&affected); err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`
 UPDATE proxy_checks
 SET status = 'untested',
+    status_changed_at = datetime('now', '+8 hours'),
     updated_at = datetime('now', '+8 hours')
 WHERE status = 'available'
   AND COALESCE(checked_at, updated_at) <= datetime('now', '+8 hours', ?)`,
-		fmt.Sprintf("-%d hours", ttlHours),
-	)
-	if err != nil {
+		modifier); err != nil {
 		return 0, err
 	}
-	result, err := s.db.Exec(`
+	if _, err := tx.Exec(`
 UPDATE proxies
 SET status = 'untested',
+    status_changed_at = datetime('now', '+8 hours'),
     updated_at = datetime('now', '+8 hours')
 WHERE enabled = 1
   AND status = 'available'
-  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', '+8 hours', ?)`,
-		fmt.Sprintf("-%d hours", ttlHours),
-	)
-	if err != nil {
+  AND COALESCE(last_checked_at, updated_at, created_at) <= datetime('now', '+8 hours', ?)
+  AND NOT EXISTS (SELECT 1 FROM proxy_checks c WHERE c.proxy_id = proxies.id)`,
+		modifier); err != nil {
 		return 0, err
 	}
-	proxyRows, _ := result.RowsAffected()
-	targetRows, _ := targetResult.RowsAffected()
-	return proxyRows + targetRows, nil
+	if err := syncAllProxyAggregateStatusesTx(tx); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	committed = true
+	return affected, nil
 }
 
 func (s *store) CountProxiesByStatus(status string) (int, error) {
 	status = strings.ToLower(strings.TrimSpace(status))
 	var count int
 	err := s.db.QueryRow("SELECT COUNT(*) FROM proxies WHERE enabled = 1 AND status = ?", status).Scan(&count)
+	return count, err
+}
+
+func (s *store) CountTargetProxiesByStatus(status string, targetProfile string) (int, error) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	targetProfile = normalizeTargetProfile(targetProfile)
+	if status != "available" && status != "failed" && status != "untested" {
+		return 0, errors.New("status must be available, failed, or untested")
+	}
+	var count int
+	err := s.db.QueryRow(`
+SELECT COUNT(*)
+FROM proxies p
+LEFT JOIN proxy_checks c ON c.proxy_id = p.id AND c.target_profile = ?
+WHERE p.enabled = 1
+  AND COALESCE(c.status, 'untested') = ?`, targetProfile, status).Scan(&count)
 	return count, err
 }
 

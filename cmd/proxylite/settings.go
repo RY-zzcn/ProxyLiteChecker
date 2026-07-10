@@ -53,6 +53,7 @@ type scheduler struct {
 	nextFetchAt         time.Time
 	nextLowStockFetchAt time.Time
 	nextCheckAt         time.Time
+	nextMaintenanceAt   time.Time
 	lastFetchAt         time.Time
 	lastCheckAt         time.Time
 	lastMaintenanceAt   time.Time
@@ -367,8 +368,8 @@ func (sc *scheduler) tick() {
 	}
 	now := beijingNow()
 	sc.tickMaintenance(settings, now)
-	sc.tickFetch(settings, now)
 	sc.tickCheck(settings, now)
+	sc.tickFetch(settings, now)
 }
 
 func (sc *scheduler) tickFetch(settings appSettings, now time.Time) {
@@ -395,7 +396,7 @@ func (sc *scheduler) tickFetch(settings appSettings, now time.Time) {
 	sc.mu.Unlock()
 
 	if settings.AutoFetchLowStockEnabled && !lowStockBlocked {
-		count, err := sc.srv.store.CountProxiesByStatus("untested")
+		count, err := sc.srv.store.CountTargetProxiesByStatus("untested", settings.CheckTargetProfile)
 		sc.mu.Lock()
 		sc.lastUntestedCount = count
 		sc.mu.Unlock()
@@ -489,24 +490,41 @@ func (sc *scheduler) tickCheck(settings appSettings, now time.Time) {
 	sc.lastMessage = "自动检测任务已启动"
 }
 
-func (sc *scheduler) Reset(settings appSettings) {
+func (sc *scheduler) ApplySettings(previous appSettings, settings appSettings) {
 	now := beijingNow()
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	if settings.AutoFetchEnabled {
+	if previous.AutoFetchEnabled != settings.AutoFetchEnabled || previous.AutoFetchIntervalMinutes != settings.AutoFetchIntervalMinutes {
+		if settings.AutoFetchEnabled {
+			sc.nextFetchAt = now.Add(time.Duration(settings.AutoFetchIntervalMinutes) * time.Minute)
+		} else {
+			sc.nextFetchAt = time.Time{}
+		}
+	}
+	if previous.AutoFetchLowStockEnabled != settings.AutoFetchLowStockEnabled ||
+		previous.AutoFetchUntestedMinimum != settings.AutoFetchUntestedMinimum ||
+		previous.AutoFetchCooldownMinutes != settings.AutoFetchCooldownMinutes {
+		if settings.AutoFetchLowStockEnabled {
+			sc.nextLowStockFetchAt = now
+		} else {
+			sc.nextLowStockFetchAt = time.Time{}
+		}
+	}
+	if previous.AutoCheckEnabled != settings.AutoCheckEnabled || previous.AutoCheckIntervalMinutes != settings.AutoCheckIntervalMinutes {
+		if settings.AutoCheckEnabled {
+			sc.nextCheckAt = now.Add(time.Duration(settings.AutoCheckIntervalMinutes) * time.Minute)
+		} else {
+			sc.nextCheckAt = time.Time{}
+		}
+	}
+	if sc.nextFetchAt.IsZero() && settings.AutoFetchEnabled {
 		sc.nextFetchAt = now.Add(time.Duration(settings.AutoFetchIntervalMinutes) * time.Minute)
-	} else {
-		sc.nextFetchAt = time.Time{}
 	}
-	if settings.AutoFetchLowStockEnabled {
+	if sc.nextLowStockFetchAt.IsZero() && settings.AutoFetchLowStockEnabled {
 		sc.nextLowStockFetchAt = now
-	} else {
-		sc.nextLowStockFetchAt = time.Time{}
 	}
-	if settings.AutoCheckEnabled {
+	if sc.nextCheckAt.IsZero() && settings.AutoCheckEnabled {
 		sc.nextCheckAt = now.Add(time.Duration(settings.AutoCheckIntervalMinutes) * time.Minute)
-	} else {
-		sc.nextCheckAt = time.Time{}
 	}
 	sc.lastError = ""
 	sc.lastMessage = "设置已保存"
@@ -545,22 +563,38 @@ func (sc *scheduler) Status(settings appSettings) schedulerStatus {
 }
 
 func (sc *scheduler) tickMaintenance(settings appSettings, now time.Time) {
-	deleted, requeued, untestedDeleted, err := sc.srv.applyProxyMaintenance(settings)
-	if err != nil {
-		sc.setError(err)
+	sc.mu.Lock()
+	if !sc.nextMaintenanceAt.IsZero() && now.Before(sc.nextMaintenanceAt) {
+		sc.mu.Unlock()
 		return
 	}
-	if deleted == 0 && requeued == 0 && untestedDeleted == 0 {
+	sc.mu.Unlock()
+	if sc.srv.jobs.RunningOfTypes("fetch", "check") != nil {
+		sc.mu.Lock()
+		sc.nextMaintenanceAt = now.Add(time.Minute)
+		sc.mu.Unlock()
+		return
+	}
+	deleted, requeued, untestedDeleted, err := sc.srv.applyProxyMaintenance(settings)
+	if err != nil {
+		sc.mu.Lock()
+		sc.nextMaintenanceAt = now.Add(time.Minute)
+		sc.lastError = err.Error()
+		sc.lastMessage = "自动维护失败"
+		sc.mu.Unlock()
 		return
 	}
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
+	sc.nextMaintenanceAt = now.Add(5 * time.Minute)
 	sc.lastMaintenanceAt = now
 	sc.lastFailedDeleted = deleted
 	sc.lastExpiredRequeued = requeued
 	sc.lastUntestedDeleted = untestedDeleted
 	sc.lastError = ""
-	sc.lastMessage = fmt.Sprintf("自动维护：删除失败 %d，过期转待检 %d，删除待检 %d", deleted, requeued, untestedDeleted)
+	if deleted > 0 || requeued > 0 || untestedDeleted > 0 {
+		sc.lastMessage = fmt.Sprintf("自动维护：删除失败 %d，过期转待检 %d，删除待检 %d", deleted, requeued, untestedDeleted)
+	}
 }
 
 func (s *server) applyProxyMaintenance(settings appSettings) (int64, int64, int64, error) {

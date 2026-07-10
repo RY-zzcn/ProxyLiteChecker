@@ -84,6 +84,24 @@ func TestTargetSpecificCheckResults(t *testing.T) {
 	if len(geminiCandidates) != 1 {
 		t.Fatalf("expected one gemini untested candidate, got %#v", geminiCandidates)
 	}
+	geminiUntested, err := st.CountTargetProxiesByStatus("untested", "gemini")
+	if err != nil || geminiUntested != 1 {
+		t.Fatalf("expected target-aware untested count, count=%d err=%v", geminiUntested, err)
+	}
+	globalItems, globalTotal, err := st.ListProxies(proxyFilter{Status: "available", TargetProfile: "all", Limit: 10})
+	if err != nil {
+		t.Fatalf("list aggregate available proxy: %v", err)
+	}
+	if globalTotal != 1 || len(globalItems) != 1 || globalItems[0].Grade != "A" || globalItems[0].TargetProfile != "generic" {
+		t.Fatalf("expected generic availability to keep aggregate status available, total=%d items=%#v", globalTotal, globalItems)
+	}
+	deleted, err := st.DeleteProxyIfNoAvailableTargets(proxyID)
+	if err != nil {
+		t.Fatalf("safe failed deletion: %v", err)
+	}
+	if deleted {
+		t.Fatalf("expected proxy with a generic available target to be retained")
+	}
 }
 
 func TestStatsIncludesTargetAvailability(t *testing.T) {
@@ -415,7 +433,8 @@ func TestDeleteExpiredUntestedOnlyDeletesOldUntested(t *testing.T) {
 	if _, err := st.db.Exec(`
 UPDATE proxies
 SET created_at = datetime('now', '+8 hours', '-4 hours'),
-    updated_at = datetime('now', '+8 hours', '-4 hours')
+	    updated_at = datetime('now', '+8 hours', '-4 hours'),
+	    status_changed_at = datetime('now', '+8 hours', '-4 hours')
 WHERE proxy_key = 'http://1.2.3.4:8080'`); err != nil {
 		t.Fatalf("age proxy: %v", err)
 	}
@@ -432,5 +451,113 @@ WHERE proxy_key = 'http://1.2.3.4:8080'`); err != nil {
 	}
 	if total != 1 {
 		t.Fatalf("expected one fresh proxy left, got %d", total)
+	}
+}
+
+func TestRequeuedProxyGetsFreshUntestedTTL(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("list proxy: items=%#v err=%v", items, err)
+	}
+	if err := st.SaveCheckResult(CheckResult{ProxyID: items[0].ID, Status: "available", Grade: "A", TargetProfile: "generic", BaseReachable: true, RecommendedUse: "generic"}); err != nil {
+		t.Fatalf("save available result: %v", err)
+	}
+	if _, err := st.db.Exec(`
+UPDATE proxy_checks SET checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE proxy_id = ?;
+UPDATE proxies SET last_checked_at = datetime('now', '+8 hours', '-2 hours'), updated_at = datetime('now', '+8 hours', '-2 hours') WHERE id = ?`, items[0].ID, items[0].ID); err != nil {
+		t.Fatalf("age available proxy: %v", err)
+	}
+	requeued, err := st.RequeueExpiredAvailable(1)
+	if err != nil || requeued != 1 {
+		t.Fatalf("expected one requeued proxy, count=%d err=%v", requeued, err)
+	}
+	deleted, err := st.DeleteExpiredUntested(1)
+	if err != nil {
+		t.Fatalf("delete expired untested: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected freshly requeued proxy to keep a full untested TTL, deleted=%d", deleted)
+	}
+}
+
+func TestStoredTargetAvailabilityMigrationAndSafeFailedCleanup(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("list proxy: items=%#v err=%v", items, err)
+	}
+	proxyID := items[0].ID
+	if _, err := st.db.Exec(`
+INSERT INTO proxy_checks (proxy_id, target_profile, status, grade, exit_ip, service_reachable, api_reachable, recommended_use, checked_at, updated_at)
+VALUES (?, 'grok', 'available', 'B', '8.8.8.8', 0, 0, 'base', datetime('now', '+8 hours'), datetime('now', '+8 hours'))`, proxyID); err != nil {
+		t.Fatalf("insert legacy target result: %v", err)
+	}
+	if _, err := st.db.Exec("UPDATE proxies SET status = 'available' WHERE id = ?", proxyID); err != nil {
+		t.Fatalf("set legacy aggregate status: %v", err)
+	}
+	if err := st.normalizeStoredProxyState(); err != nil {
+		t.Fatalf("normalize stored state: %v", err)
+	}
+	grokFailed, total, err := st.ListProxies(proxyFilter{Status: "failed", TargetProfile: "grok", Limit: 10})
+	if err != nil || total != 1 || len(grokFailed) != 1 || grokFailed[0].RecommendedUse != "base" {
+		t.Fatalf("expected legacy base-only target result to become failed/base, total=%d items=%#v err=%v", total, grokFailed, err)
+	}
+	deleted, err := st.DeleteFailedProxies()
+	if err != nil {
+		t.Fatalf("delete failed proxies: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected target-only failure without generic evidence to be retained, deleted=%d", deleted)
+	}
+}
+
+func TestFailedCleanupRequiresGenericFailureWithoutAvailableTarget(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080\nhttp://5.6.7.8:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxies: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil || len(items) != 2 {
+		t.Fatalf("list proxies: items=%#v err=%v", items, err)
+	}
+	for _, item := range items {
+		if err := st.SaveCheckResult(CheckResult{ProxyID: item.ID, Status: "failed", Grade: "F", TargetProfile: "generic", RecommendedUse: "invalid"}); err != nil {
+			t.Fatalf("save generic failure: %v", err)
+		}
+	}
+	if err := st.SaveCheckResult(CheckResult{ProxyID: items[0].ID, Status: "available", Grade: "A", TargetProfile: "grok", APIReachable: boolPtr(true), RecommendedUse: "api"}); err != nil {
+		t.Fatalf("save target availability: %v", err)
+	}
+	deleted, err := st.DeleteFailedProxies()
+	if err != nil {
+		t.Fatalf("delete failed proxies: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected only globally unavailable generic failure to be deleted, got %d", deleted)
 	}
 }

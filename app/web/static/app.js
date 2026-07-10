@@ -6,6 +6,7 @@ const state = {
   stats: null,
   geoip: null,
   activeJob: null,
+  watchedJobId: null,
   pollTimer: null,
   gatewayTimer: null,
   sourceSelected: 0,
@@ -77,6 +78,7 @@ async function api(path, options = {}) {
 }
 
 function showLogin() {
+  stopJobPolling();
   stopGatewayPolling();
   el("loginView").hidden = false;
   el("appView").hidden = true;
@@ -301,10 +303,15 @@ async function bootstrap() {
   renderSettings(state.settings, state.scheduler);
   renderSources();
   renderGateway(payload.gateway || {});
-  renderJobs(payload.active_jobs || []);
+  const activeJobs = payload.active_jobs || [];
+  renderJobs(activeJobs);
+  if (activeJobs.length) {
+    state.watchedJobId = activeJobs[0].id;
+    startPolling();
+  }
   loadGeoIP().catch(() => {});
   await loadProxies();
-  startGatewayPolling();
+  if (!state.pollTimer) startGatewayPolling();
 }
 
 function renderStats(stats) {
@@ -680,7 +687,7 @@ function gatewayHostFromBind(value) {
 }
 
 function renderJobs(jobs) {
-  const job = jobs.find((item) => item.status === "running") || jobs[0] || null;
+  const job = jobs.find((item) => ["running", "cancel_requested"].includes(item.status)) || jobs[0] || null;
   state.activeJob = job;
   if (!job) {
     el("taskSubtitle").textContent = "空闲";
@@ -691,7 +698,15 @@ function renderJobs(jobs) {
   }
   const percent = pct(job.done, job.total);
   const typeText = { fetch: "拉取", check: "检测" }[job.type] || job.type;
-  el("taskSubtitle").textContent = `${typeText} · ${job.status} · ${job.done}/${job.total}`;
+  const statusText = {
+    running: "运行中",
+    cancel_requested: "正在停止",
+    completed: "已完成",
+    partial: "部分完成",
+    failed: "失败",
+    cancelled: "已取消",
+  }[job.status] || job.status;
+  el("taskSubtitle").textContent = `${typeText} · ${statusText} · ${job.done}/${job.total}`;
   el("jobMessage").textContent = `${job.message || ""} ${percent}%`;
   el("progressBar").style.width = `${percent}%`;
   el("cancelJobBtn").disabled = job.status !== "running";
@@ -725,7 +740,9 @@ function renderGeoIP(status) {
 
 async function loadActiveJobs() {
   const payload = await api("/api/jobs/active");
-  renderJobs(payload.items || []);
+  const jobs = payload.items || [];
+  renderJobs(jobs);
+  return jobs;
 }
 
 async function loadSettings() {
@@ -845,6 +862,7 @@ async function runCheck(event) {
 }
 
 async function watchJob(jobId) {
+  state.watchedJobId = String(jobId);
   const job = await api(`/api/jobs/${jobId}`);
   renderJobs([job]);
   startPolling();
@@ -852,22 +870,54 @@ async function watchJob(jobId) {
 
 function startPolling() {
   if (state.pollTimer) return;
-  state.pollTimer = setInterval(async () => {
+  stopGatewayPolling();
+  const poll = async () => {
     try {
-      await loadActiveJobs();
-      await loadStats();
-      await loadGateway();
-      await loadSettings();
-      if (!state.activeJob) {
-        await loadProxies();
-        clearInterval(state.pollTimer);
+      let job = null;
+      if (state.watchedJobId) {
+        job = await api(`/api/jobs/${state.watchedJobId}`);
+        renderJobs([job]);
+      } else {
+        const jobs = await loadActiveJobs();
+        job = jobs[0] || null;
+        if (job) state.watchedJobId = String(job.id);
+      }
+      if (job && ["completed", "partial", "failed", "cancelled"].includes(job.status)) {
         state.pollTimer = null;
-        toast("任务已完成", "success");
+        state.watchedJobId = null;
+        await loadStats();
+        await loadGateway();
+        await loadSettings();
+        await loadProxies();
+        renderJobs([job]);
+        if (job.status === "completed") {
+          toast(job.message || "任务已完成", "success");
+        } else if (job.status === "partial") {
+          toast(job.message || "任务部分完成", "info");
+        } else if (job.status === "cancelled") {
+          toast(job.message || "任务已取消", "info");
+        } else {
+          toast(job.error || job.message || "任务失败", "error");
+        }
+        startGatewayPolling();
+        return;
       }
     } catch (error) {
       toast(error.message, "error");
     }
-  }, 1200);
+    if (el("appView").hidden) {
+      state.pollTimer = null;
+      return;
+    }
+    state.pollTimer = setTimeout(poll, 1200);
+  };
+  state.pollTimer = setTimeout(poll, 1200);
+}
+
+function stopJobPolling() {
+  if (state.pollTimer) clearTimeout(state.pollTimer);
+  state.pollTimer = null;
+  state.watchedJobId = null;
 }
 
 function startGatewayPolling() {
@@ -875,6 +925,13 @@ function startGatewayPolling() {
   state.gatewayTimer = setInterval(async () => {
     try {
       await loadGateway();
+      if (!state.pollTimer) {
+        const jobs = await loadActiveJobs();
+        if (jobs.length) {
+          state.watchedJobId = String(jobs[0].id);
+          startPolling();
+        }
+      }
     } catch {
       // Avoid repeating toast noise when the session expires or the service restarts.
     }
@@ -988,9 +1045,11 @@ async function copyGatewayAddress(event) {
 async function cancelJob(event) {
   if (!state.activeJob) return;
   await withButton(event.currentTarget, "停止中", async () => {
-    await api(`/api/jobs/${state.activeJob.id}/cancel`, { method: "POST" });
+    const job = await api(`/api/jobs/${state.activeJob.id}/cancel`, { method: "POST" });
+    state.watchedJobId = String(job.id);
+    renderJobs([job]);
+    startPolling();
     toast("已请求停止任务", "success");
-    await refreshAll();
   });
 }
 

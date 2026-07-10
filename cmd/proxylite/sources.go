@@ -87,12 +87,19 @@ func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, e
 }
 
 func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs []string, limitPerSource int, scheduled bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.jobs.fail(jobID, fmt.Errorf("拉取任务异常退出：%v", recovered))
+		}
+	}()
 	sources := selectedSources(sourceIDs)
 	total := len(sources)
 	s.jobs.Update(jobID, map[string]any{"total": total, "message": fmt.Sprintf("开始拉取 %d 个代理源", total)})
 	added := 0
 	updated := 0
 	failed := 0
+	succeededSources := 0
+	skippedSources := 0
 	sourceResults := []map[string]any{}
 	for i, source := range sources {
 		if ctx.Err() != nil {
@@ -104,6 +111,7 @@ func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs
 			if err != nil {
 				s.jobs.Update(jobID, map[string]any{"message": fmt.Sprintf("源健康读取失败：%s", source.Name)})
 			} else if coolingDown {
+				skippedSources++
 				sourceResults = append(sourceResults, map[string]any{"id": source.ID, "name": source.Name, "skipped": true, "disabled_until": disabledUntil})
 				s.jobs.Update(jobID, map[string]any{"done": i + 1, "message": fmt.Sprintf("跳过冷却源：%s", source.Name)})
 				continue
@@ -130,6 +138,7 @@ func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs
 		sourceUpdated := anyToInt(result["updated"])
 		added += sourceAdded
 		updated += sourceUpdated
+		succeededSources++
 		_ = s.store.RecordSourceFetch(source.ID, count, sourceAdded, sourceUpdated, nil)
 		sourceResults = append(sourceResults, map[string]any{
 			"id":      source.ID,
@@ -145,13 +154,35 @@ func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs
 			"message": fmt.Sprintf("已导入：%s", source.Name),
 		})
 	}
+	if ctx.Err() != nil {
+		s.jobs.finishCancelled(jobID, "拉取代理源已停止")
+		return
+	}
 	result := map[string]any{
-		"added":          added,
-		"updated":        updated,
-		"failed_sources": failed,
-		"sources":        sourceResults,
+		"added":              added,
+		"updated":            updated,
+		"failed_sources":     failed,
+		"successful_sources": succeededSources,
+		"skipped_sources":    skippedSources,
+		"sources":            sourceResults,
 	}
 	s.jobs.Update(jobID, map[string]any{"done": total, "total": total, "success": added + updated, "failed": failed})
+	s.finalizeFetchJob(jobID, total, added, updated, failed, succeededSources, skippedSources, result)
+}
+
+func (s *server) finalizeFetchJob(jobID string, total int, added int, updated int, failed int, succeededSources int, skippedSources int, result map[string]any) {
+	if succeededSources == 0 && failed > 0 {
+		s.jobs.failWithResult(jobID, fmt.Errorf("代理源全部拉取失败：%d 个失败，%d 个跳过", failed, skippedSources), result)
+		return
+	}
+	if succeededSources > 0 && failed > 0 {
+		s.jobs.partial(jobID, fmt.Sprintf("拉取部分完成：新增 %d，更新 %d，失败源 %d", added, updated, failed), result)
+		return
+	}
+	if succeededSources == 0 && skippedSources == total {
+		s.jobs.complete(jobID, fmt.Sprintf("拉取完成：%d 个代理源处于冷却期，本轮已跳过", skippedSources), result)
+		return
+	}
 	s.jobs.complete(jobID, fmt.Sprintf("拉取完成：新增 %d，更新 %d，失败源 %d", added, updated, failed), result)
 }
 

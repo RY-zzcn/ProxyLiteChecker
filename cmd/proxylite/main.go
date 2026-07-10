@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	appVersion           = "0.3.3"
+	appVersion           = "0.3.4"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -389,7 +389,7 @@ func (s *server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.applyGatewaySettings(settings)
-	s.scheduler.Reset(settings)
+	s.scheduler.ApplySettings(current, settings)
 	jsonResponse(w, http.StatusOK, map[string]any{
 		"settings":  settings,
 		"scheduler": s.scheduler.Status(settings),
