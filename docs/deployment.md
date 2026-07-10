@@ -79,13 +79,19 @@ state tables, backfills existing v0.3.4 checks, and keeps legacy tables and
 quality columns for short-term rollback compatibility.
 
 Back up the data directory before upgrading. On first startup, confirm the log
-contains schema version `401001` for v0.4.1 (`400001` for v0.4.0). v0.4.1 adds
-persistent `job_runs`, `scheduler_state`, and coordinator fairness state. If a
-rollback is required, stop the service,
+contains schema version `402001` for v0.4.2 (`401001` for v0.4.1 and `400001`
+for v0.4.0). v0.4.1 adds persistent `job_runs`, `scheduler_state`, and
+coordinator fairness state. v0.4.2 adds the rebuildable `ip_geo_cache`,
+proxy-first atomic result bundles, and performance indexes. If a rollback is
+required, stop the service,
 restore the pre-upgrade backup, and then start the older binary.
 
 Rolling back to v0.4.0 does not delete v0.4.1 task history, but the older
 in-memory scheduler ignores persisted due times and backoff state.
+
+Rolling back from v0.4.2 leaves `ip_geo_cache` unused. Restore the pre-upgrade
+backup when validating a full rollback; older versions ignore the cache table
+but do not understand v0.4.2 runtime behavior or diagnostics.
 
 ## Local Update
 

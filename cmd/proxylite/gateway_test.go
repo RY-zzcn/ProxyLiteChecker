@@ -4,9 +4,18 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func gatewayTestPool(urls ...string) []gatewayUpstream {
+	items := make([]gatewayUpstream, 0, len(urls))
+	for _, value := range urls {
+		items = append(items, gatewayUpstream{URL: value, SuccessRate: 1})
+	}
+	return items
+}
 
 func TestGatewaySelectUpstreamRoundRobinByTarget(t *testing.T) {
 	st, err := openStore(":memory:")
@@ -157,6 +166,22 @@ func TestGatewaySelectUpstreamUsesLoadedPoolUntilRefresh(t *testing.T) {
 	endpoint.selector.mu.Lock()
 	endpoint.selector.upstreamsLoadedAt = time.Now().Add(-gatewayUpstreamRefreshInterval - time.Second)
 	endpoint.selector.index = 0
+	previousGeneration := endpoint.selector.poolGeneration
+	endpoint.selector.mu.Unlock()
+	whileRefreshing, err := gateway.selectUpstream(endpoint)
+	if err != nil {
+		t.Fatalf("select while refreshing upstreams: %v", err)
+	}
+	if whileRefreshing != "http://1.1.1.1:8080" {
+		t.Fatalf("expected old pool to remain selectable during refresh, got %q", whileRefreshing)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		endpoint.selector.mu.Lock()
+		defer endpoint.selector.mu.Unlock()
+		return endpoint.selector.poolGeneration > previousGeneration
+	})
+	endpoint.selector.mu.Lock()
+	endpoint.selector.index = 0
 	endpoint.selector.mu.Unlock()
 	refreshed, err := gateway.selectUpstream(endpoint)
 	if err != nil {
@@ -177,7 +202,7 @@ func TestGatewaySelectorSkipsIsolatedUpstream(t *testing.T) {
 	})
 	endpoint := gateway.endpoints[0]
 	endpoint.selector.mu.Lock()
-	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080", "http://2.2.2.2:8080")
 	endpoint.selector.upstreamsLoadedAt = time.Now()
 	endpoint.selector.mu.Unlock()
 
@@ -211,7 +236,7 @@ func TestGatewaySelectorReleasesWhenAllUpstreamsIsolated(t *testing.T) {
 	})
 	endpoint := gateway.endpoints[0]
 	endpoint.selector.mu.Lock()
-	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080", "http://2.2.2.2:8080")
 	endpoint.selector.upstreamsLoadedAt = time.Now()
 	endpoint.selector.mu.Unlock()
 	endpoint.recordUpstreamFailure("http://1.1.1.1:8080", errors.New("dial timeout"))
@@ -225,8 +250,8 @@ func TestGatewaySelectorReleasesWhenAllUpstreamsIsolated(t *testing.T) {
 		t.Fatalf("expected an upstream after releasing isolation window")
 	}
 	snapshot := gateway.endpointSelectorSnapshot(endpoint)
-	if snapshot.Active != 2 || snapshot.Skipped != 0 || snapshot.LastAllReleasedAt == "" {
-		t.Fatalf("expected all isolation state released, got %#v", snapshot)
+	if !snapshot.Degraded || snapshot.Open != 2 || snapshot.LastAllReleasedAt == "" {
+		t.Fatalf("expected explicit degraded selection without clearing isolation, got %#v", snapshot)
 	}
 }
 
@@ -241,7 +266,7 @@ func TestGatewaySelectorStrategySwitchAppliesImmediately(t *testing.T) {
 	})
 	endpoint := gateway.endpoints[0]
 	endpoint.selector.mu.Lock()
-	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080", "http://2.2.2.2:8080")
 	endpoint.selector.upstreamsLoadedAt = time.Now()
 	endpoint.selector.index = 0
 	endpoint.selector.mu.Unlock()
@@ -272,7 +297,7 @@ func TestGatewayOpenTunnelRetriesNextUpstream(t *testing.T) {
 	})
 	endpoint := gateway.endpoints[0]
 	endpoint.selector.mu.Lock()
-	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080", "http://2.2.2.2:8080")
 	endpoint.selector.upstreamsLoadedAt = time.Now()
 	endpoint.selector.mu.Unlock()
 	calls := []string{}
@@ -314,7 +339,7 @@ func TestGatewayOpenTunnelDoesNotRepeatTriedUpstreams(t *testing.T) {
 	})
 	endpoint := gateway.endpoints[0]
 	endpoint.selector.mu.Lock()
-	endpoint.selector.upstreams = []string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080", "http://2.2.2.2:8080")
 	endpoint.selector.upstreamsLoadedAt = time.Now()
 	endpoint.selector.mu.Unlock()
 	calls := []string{}
@@ -481,6 +506,184 @@ func TestGatewayStatusReportsUniqueAvailableAcrossTargets(t *testing.T) {
 	}
 	if status["unique_available_upstreams"] != 2 || status["available_upstreams"] != 2 {
 		t.Fatalf("expected two unique available upstreams, got %#v", status)
+	}
+}
+
+func TestGatewayStatusShortCacheAndGeneration(t *testing.T) {
+	st, _ := openStore(":memory:")
+	_ = st.EnsureSchema("admin", "password")
+	gateway := newGatewayServer(st, gatewayConfig{Host: "127.0.0.1", Port: 0, TargetProfiles: []string{"openai"}, UpstreamLimit: 10})
+	first := gateway.Status()
+	if first["generated_at"] == "" || anyToInt(first["total_connections"]) != 0 {
+		t.Fatalf("unexpected initial gateway status: %#v", first)
+	}
+	atomic.AddInt64(&gateway.endpoints[0].totalConnections, 1)
+	second := gateway.Status()
+	if anyToInt(second["total_connections"]) != 0 || second["generated_at"] != first["generated_at"] {
+		t.Fatalf("expected short cached gateway status: %#v", second)
+	}
+	gateway.invalidateStatus()
+	third := gateway.Status()
+	if anyToInt(third["total_connections"]) != 1 {
+		t.Fatalf("gateway generation did not invalidate cache: %#v", third)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err := st.SaveCheckResult(CheckResult{ProxyID: items[0].ID, Status: "available", Grade: "A", TargetProfile: "openai", ServiceReachable: true, RecommendedUse: "web"}); err != nil {
+		t.Fatalf("save target: %v", err)
+	}
+	fourth := gateway.Status()
+	if anyToInt(fourth["available_upstreams"]) != 1 {
+		t.Fatalf("store generation did not invalidate gateway cache: %#v", fourth)
+	}
+}
+
+func TestGatewaySlowRefreshDoesNotBlockExistingPool(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{Host: "127.0.0.1", Port: 0, TargetProfiles: []string{"openai"}, UpstreamLimit: 10})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080")
+	endpoint.selector.upstreamsLoadedAt = time.Now().Add(-gatewayUpstreamRefreshInterval - time.Second)
+	endpoint.selector.poolGeneration = 1
+	endpoint.selector.mu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	gateway.loadUpstreams = func(availableProxyFilter) ([]gatewayUpstream, error) {
+		close(started)
+		<-release
+		return gatewayTestPool("http://2.2.2.2:8080"), nil
+	}
+	before := time.Now()
+	selected, err := gateway.selectUpstream(endpoint)
+	if err != nil || selected != "http://1.1.1.1:8080" {
+		t.Fatalf("expected old pool during refresh, selected=%q err=%v", selected, err)
+	}
+	if elapsed := time.Since(before); elapsed > 100*time.Millisecond {
+		t.Fatalf("slow refresh blocked old-pool selection: %s", elapsed)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatalf("background refresh did not start")
+	}
+	close(release)
+	waitForCondition(t, time.Second, func() bool {
+		endpoint.selector.mu.Lock()
+		defer endpoint.selector.mu.Unlock()
+		return endpoint.selector.poolGeneration == 2
+	})
+	selected, err = gateway.selectUpstream(endpoint)
+	if err != nil || selected != "http://2.2.2.2:8080" {
+		t.Fatalf("refreshed pool not installed atomically, selected=%q err=%v", selected, err)
+	}
+}
+
+func TestGatewayHalfOpenAllowsOneProbeAndPreservesEWMA(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{Host: "127.0.0.1", Port: 0, TargetProfiles: []string{"openai"}, FailureThreshold: 1, FailureCooldownS: 1})
+	endpoint := gateway.endpoints[0]
+	upstream := "http://1.1.1.1:8080"
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = gatewayTestPool(upstream)
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.mu.Unlock()
+	endpoint.selector.reportFailure(upstream, errors.New("failed"))
+	endpoint.selector.mu.Lock()
+	state := endpoint.selector.failures[upstream]
+	state.IsolatedUntil = time.Now().Add(-time.Millisecond)
+	endpoint.selector.failures[upstream] = state
+	endpoint.selector.mu.Unlock()
+	selected, err := gateway.selectUpstream(endpoint)
+	if err != nil || selected != upstream {
+		t.Fatalf("expected one half-open probe, selected=%q err=%v", selected, err)
+	}
+	if _, err := gateway.selectUpstream(endpoint); err == nil {
+		t.Fatalf("expected concurrent half-open probe to be rejected")
+	}
+	endpoint.selector.reportSuccess(upstream, 25*time.Millisecond)
+	selected, err = gateway.selectUpstream(endpoint)
+	if err != nil || selected != upstream {
+		t.Fatalf("expected successful half-open to close circuit, selected=%q err=%v", selected, err)
+	}
+	endpoint.selector.mu.Lock()
+	state = endpoint.selector.failures[upstream]
+	endpoint.selector.mu.Unlock()
+	if state.Samples != 2 || state.SuccessEWMA <= 0 || state.SuccessEWMA >= 1 || state.LatencyEWMA <= 0 || state.Count != 0 {
+		t.Fatalf("runtime EWMA history was cleared or not updated: %#v", state)
+	}
+}
+
+func TestGatewayRefreshFailureKeepsOldPool(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{Host: "127.0.0.1", Port: 0, TargetProfiles: []string{"openai"}})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080")
+	endpoint.selector.upstreamsLoadedAt = time.Now().Add(-gatewayUpstreamRefreshInterval - time.Second)
+	endpoint.selector.mu.Unlock()
+	gateway.loadUpstreams = func(availableProxyFilter) ([]gatewayUpstream, error) {
+		return nil, errors.New("database unavailable")
+	}
+	selected, err := gateway.selectUpstream(endpoint)
+	if err != nil || selected != "http://1.1.1.1:8080" {
+		t.Fatalf("expected old pool after refresh failure, selected=%q err=%v", selected, err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		endpoint.selector.mu.Lock()
+		defer endpoint.selector.mu.Unlock()
+		return endpoint.selector.lastRefreshError != ""
+	})
+	snapshot := gateway.endpointSelectorSnapshot(endpoint)
+	if snapshot.Loaded != 1 || snapshot.LastRefreshError == "" {
+		t.Fatalf("old pool or refresh error missing: %#v", snapshot)
+	}
+}
+
+func TestGatewayRefreshDiscardsStaleConfigGeneration(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{Host: "127.0.0.1", Port: 0, TargetProfiles: []string{"openai"}, UpstreamStrategy: gatewayStrategyRoundRobin})
+	endpoint := gateway.endpoints[0]
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = gatewayTestPool("http://1.1.1.1:8080")
+	endpoint.selector.upstreamsLoadedAt = time.Now().Add(-gatewayUpstreamRefreshInterval - time.Second)
+	endpoint.selector.poolGeneration = 1
+	endpoint.selector.mu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	gateway.loadUpstreams = func(availableProxyFilter) ([]gatewayUpstream, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return gatewayTestPool("http://stale.invalid:8080"), nil
+		}
+		return gatewayTestPool("http://fresh.invalid:8080"), nil
+	}
+	if _, err := gateway.selectUpstream(endpoint); err != nil {
+		t.Fatalf("start stale refresh: %v", err)
+	}
+	<-started
+	applied := make(chan struct{})
+	go func() {
+		cfg := gateway.configSnapshot()
+		cfg.UpstreamStrategy = gatewayStrategyStabilityFirst
+		gateway.ApplyRuntimeConfig(cfg)
+		close(applied)
+	}()
+	waitForCondition(t, time.Second, func() bool {
+		endpoint.selector.mu.Lock()
+		defer endpoint.selector.mu.Unlock()
+		return endpoint.selector.configGeneration >= 2
+	})
+	close(release)
+	select {
+	case <-applied:
+	case <-time.After(time.Second):
+		t.Fatalf("new configuration refresh did not finish")
+	}
+	endpoint.selector.mu.Lock()
+	defer endpoint.selector.mu.Unlock()
+	if len(endpoint.selector.upstreams) != 1 || endpoint.selector.upstreams[0].URL != "http://fresh.invalid:8080" || endpoint.selector.poolGeneration != 2 {
+		t.Fatalf("stale refresh replaced new configuration pool: %#v generation=%d", endpoint.selector.upstreams, endpoint.selector.poolGeneration)
 	}
 }
 

@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+	"time"
+)
 
 func TestTargetSpecificCheckResults(t *testing.T) {
 	st, err := openStore(":memory:")
@@ -148,6 +154,36 @@ func TestStatsIncludesTargetAvailability(t *testing.T) {
 	}
 }
 
+func TestStatsShortCacheInvalidatesAfterWrites(t *testing.T) {
+	st, _ := openStore(":memory:")
+	_ = st.EnsureSchema("admin", "password")
+	first, err := st.Stats()
+	if err != nil || anyToInt(first["total"]) != 0 || first["generated_at"] == "" {
+		t.Fatalf("unexpected initial stats: %#v err=%v", first, err)
+	}
+	second, err := st.Stats()
+	if err != nil || second["generated_at"] != first["generated_at"] {
+		t.Fatalf("expected cached stats generation: first=%#v second=%#v err=%v", first, second, err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	third, err := st.Stats()
+	if err != nil || anyToInt(third["total"]) != 1 || anyToInt(third["untested"]) != 1 {
+		t.Fatalf("import did not invalidate stats: %#v err=%v", third, err)
+	}
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err := st.SaveCheckResult(CheckResult{
+		ProxyID: items[0].ID, Status: "available", Grade: "A", TargetProfile: "openai", ServiceReachable: true, RecommendedUse: "web",
+	}); err != nil {
+		t.Fatalf("save check: %v", err)
+	}
+	fourth, err := st.Stats()
+	if err != nil || anyToInt(fourth["available"]) != 1 || anyToInt(fourth["target_available_records"]) != 1 {
+		t.Fatalf("check write did not invalidate aggregate stats: %#v err=%v", fourth, err)
+	}
+}
+
 func TestCountAvailableProxyURLsDeduplicatesDetectedProtocol(t *testing.T) {
 	st, err := openStore(":memory:")
 	if err != nil {
@@ -197,6 +233,13 @@ func TestCountAvailableProxyURLsDeduplicatesDetectedProtocol(t *testing.T) {
 	}
 	if stats["available"] != 2 || stats["available_records"] != 3 {
 		t.Fatalf("expected unique available count and record count, got %#v", stats)
+	}
+	if stats["unique_target_available"] != 2 {
+		t.Fatalf("expected two globally unique target URLs, got %#v", stats)
+	}
+	openAI := targetStatsForTest(t, stats, "openai")
+	if openAI["available"] != 2 || openAI["available_records"] != 3 {
+		t.Fatalf("expected target URL dedupe without losing record count, got %#v", openAI)
 	}
 	urls, err := st.AvailableProxyURLs(0, "openai")
 	if err != nil {
@@ -584,7 +627,7 @@ func TestStateModelSchemaVersionAndMigrationIdempotency(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 	version, err := st.SchemaVersion()
-	if err != nil || version != taskSchedulerMigrationVersion {
+	if err != nil || version != geoCacheMigrationVersion {
 		t.Fatalf("unexpected schema version=%d err=%v", version, err)
 	}
 	if _, err := st.ImportProxies("http://1.2.3.4:8080", "legacy", "http"); err != nil {
@@ -770,4 +813,330 @@ END`); err != nil {
 	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxy_target_state WHERE proxy_id = ?", proxyID).Scan(&targetCount); err != nil || targetCount != 0 {
 		t.Fatalf("unexpected target rows=%d err=%v", targetCount, err)
 	}
+}
+
+func TestProxyCheckBundleWritesProbeAndTargetsAtomically(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	proxyID := items[0].ID
+	if _, err := st.db.Exec(`
+CREATE TRIGGER reject_grok_target_state
+BEFORE INSERT ON proxy_target_state
+WHEN NEW.target_profile = 'grok'
+BEGIN
+  SELECT RAISE(ABORT, 'grok target write rejected');
+END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	err = st.SaveProxyCheckBundle(proxyID, []CheckResult{
+		{ProxyID: proxyID, Status: "available", Grade: "A", TargetProfile: "openai", BaseReachable: true, ServiceReachable: true, RecommendedUse: "web"},
+		{ProxyID: proxyID, Status: "available", Grade: "A", TargetProfile: "grok", BaseReachable: true, ServiceReachable: true, RecommendedUse: "web"},
+	})
+	if err == nil {
+		t.Fatalf("expected bundle write failure")
+	}
+	var probeStatus string
+	if err := st.db.QueryRow("SELECT status FROM proxy_probe_state WHERE proxy_id = ?", proxyID).Scan(&probeStatus); err != nil {
+		t.Fatalf("read probe status: %v", err)
+	}
+	if probeStatus != "untested" {
+		t.Fatalf("probe write escaped bundle rollback: %s", probeStatus)
+	}
+	for _, table := range []string{"proxy_target_state", "proxy_checks"} {
+		var count int
+		if err := st.db.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE proxy_id = ?", proxyID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("unexpected %s rows=%d err=%v", table, count, err)
+		}
+	}
+}
+
+func TestProxyCheckBundleUpdatesProbeOnce(t *testing.T) {
+	st, _ := openStore(":memory:")
+	_ = st.EnsureSchema("admin", "password")
+	_, _ = st.ImportProxies("http://1.2.3.4:8080", "test", "http")
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	proxyID := items[0].ID
+	errorMessage := "[connect] failed"
+	if err := st.SaveProxyCheckBundle(proxyID, []CheckResult{
+		{ProxyID: proxyID, Status: "failed", Grade: "F", TargetProfile: "openai", RecommendedUse: "invalid", LastError: &errorMessage},
+		{ProxyID: proxyID, Status: "failed", Grade: "F", TargetProfile: "grok", RecommendedUse: "invalid", LastError: &errorMessage},
+	}); err != nil {
+		t.Fatalf("save failed bundle: %v", err)
+	}
+	var probeFailures, targetCount int
+	if err := st.db.QueryRow("SELECT consecutive_failures FROM proxy_probe_state WHERE proxy_id = ?", proxyID).Scan(&probeFailures); err != nil {
+		t.Fatalf("read probe failures: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxy_target_state WHERE proxy_id = ?", proxyID).Scan(&targetCount); err != nil {
+		t.Fatalf("count targets: %v", err)
+	}
+	if probeFailures != 1 || targetCount != 2 {
+		t.Fatalf("expected one probe transition and two target writes, probe=%d targets=%d", probeFailures, targetCount)
+	}
+}
+
+func TestProxyCheckBundleHonorsCancelledContext(t *testing.T) {
+	st, _ := openStore(":memory:")
+	_ = st.EnsureSchema("admin", "password")
+	_, _ = st.ImportProxies("http://1.2.3.4:8080", "test", "http")
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	proxyID := items[0].ID
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := st.SaveProxyCheckBundleContext(ctx, proxyID, []CheckResult{{
+		ProxyID: proxyID, Status: "available", Grade: "A", TargetProfile: "openai", BaseReachable: true, ServiceReachable: true, RecommendedUse: "web",
+	}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancelled persistence, got %v", err)
+	}
+}
+
+func TestExternalDatabaseMigrationChain(t *testing.T) {
+	path := os.Getenv("PLC_TEST_MIGRATION_DB")
+	if path == "" {
+		t.Skip("PLC_TEST_MIGRATION_DB is not set")
+	}
+	st, err := openStore(path)
+	if err != nil {
+		t.Fatalf("open external migration database: %v", err)
+	}
+	defer st.db.Close()
+	var before int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxies").Scan(&before); err != nil {
+		t.Fatalf("count pre-migration proxies: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("migrate external database: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("repeat external migration: %v", err)
+	}
+	version, err := st.SchemaVersion()
+	if err != nil || version != geoCacheMigrationVersion {
+		t.Fatalf("unexpected migrated schema version=%d err=%v", version, err)
+	}
+	var proxies, probes int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxies").Scan(&proxies); err != nil {
+		t.Fatalf("count migrated proxies: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxy_probe_state").Scan(&probes); err != nil {
+		t.Fatalf("count migrated probes: %v", err)
+	}
+	if proxies != before || probes != proxies {
+		t.Fatalf("migration lost identities or probes: before=%d proxies=%d probes=%d", before, proxies, probes)
+	}
+	var integrity string
+	if err := st.db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("integrity check failed: %q err=%v", integrity, err)
+	}
+	var foreignKeyErrors int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM pragma_foreign_key_check").Scan(&foreignKeyErrors); err != nil || foreignKeyErrors != 0 {
+		t.Fatalf("foreign key check failed: count=%d err=%v", foreignKeyErrors, err)
+	}
+}
+
+func TestExternalDatabasePerformance(t *testing.T) {
+	path := os.Getenv("PLC_TEST_PERF_DB")
+	if path == "" {
+		t.Skip("PLC_TEST_PERF_DB is not set")
+	}
+	started := time.Now()
+	st, err := openStore(path)
+	if err != nil {
+		t.Fatalf("open performance database: %v", err)
+	}
+	defer st.db.Close()
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure performance schema: %v", err)
+	}
+	var count int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM proxies").Scan(&count); err != nil {
+		t.Fatalf("count performance proxies: %v", err)
+	}
+	if count < 100000 {
+		if _, err := st.db.Exec("PRAGMA synchronous = OFF"); err != nil {
+			t.Fatalf("set performance pragma: %v", err)
+		}
+		tx, err := st.db.Begin()
+		if err != nil {
+			t.Fatalf("begin performance fixture: %v", err)
+		}
+		fixtureSQL := `
+WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+numbers(n) AS (
+  SELECT a.d + b.d*10 + c.d*100 + d.d*1000 + e.d*10000 + f.d*100000 + 1
+  FROM digits a CROSS JOIN digits b CROSS JOIN digits c CROSS JOIN digits d CROSS JOIN digits e CROSS JOIN digits f
+)
+INSERT INTO proxies (
+  proxy_key, ip, port, protocol, source, status, status_changed_at, enabled,
+  created_at, updated_at, first_seen_at, last_seen_at
+)
+SELECT printf('http://perf-%06d.invalid:%d', n, 10000 + (n % 50000)),
+       printf('198.18.%d.%d', (n / 256) % 256, n % 256),
+       10000 + (n % 50000), 'http', 'perf', 'untested', datetime('now', '+8 hours'), 1,
+       datetime('now', '+8 hours'), datetime('now', '+8 hours'), datetime('now', '+8 hours'), datetime('now', '+8 hours')
+FROM numbers WHERE n <= 100000;
+
+INSERT INTO proxy_probe_state (
+  proxy_id, status, status_changed_at, detected_protocol, base_reachable, exit_ip,
+  latency_ms, success_rate, country, updated_at, checked_at
+)
+SELECT id,
+       CASE id % 3 WHEN 0 THEN 'available' WHEN 1 THEN 'failed' ELSE 'untested' END,
+       datetime('now', '+8 hours'), 'http', CASE WHEN id % 3 = 0 THEN 1 ELSE 0 END,
+       CASE WHEN id % 3 = 0 THEN printf('203.0.113.%d', id % 250 + 1) ELSE NULL END,
+       20 + (id % 500), CASE WHEN id % 3 = 0 THEN 1 ELSE 0 END,
+       CASE WHEN id % 2 = 0 THEN 'US' ELSE 'JP' END,
+       datetime('now', '+8 hours'), datetime('now', '+8 hours')
+FROM proxies;
+
+WITH profiles(target_profile, ordinal) AS (
+  VALUES ('generic', 1), ('openai', 2), ('grok', 3), ('gemini', 4), ('claude', 5)
+)
+INSERT INTO proxy_target_state (
+  proxy_id, target_profile, status, status_changed_at, capability, service_reachable,
+  latency_ms, success_rate, grade, recommended_use, checked_at, updated_at
+)
+SELECT p.id, profiles.target_profile,
+       CASE (p.id + profiles.ordinal) % 3 WHEN 0 THEN 'available' WHEN 1 THEN 'failed' ELSE 'untested' END,
+       datetime('now', '+8 hours'),
+       CASE WHEN (p.id + profiles.ordinal) % 3 = 0 THEN 'web' ELSE 'none' END,
+       CASE WHEN (p.id + profiles.ordinal) % 3 = 0 THEN 1 ELSE 0 END,
+       30 + ((p.id + profiles.ordinal) % 700),
+       CASE WHEN (p.id + profiles.ordinal) % 3 = 0 THEN 1 ELSE 0 END,
+       CASE (p.id + profiles.ordinal) % 3 WHEN 0 THEN 'A' WHEN 1 THEN 'F' ELSE '' END,
+       CASE WHEN (p.id + profiles.ordinal) % 3 = 0 THEN profiles.target_profile ELSE 'invalid' END,
+       datetime('now', '+8 hours'), datetime('now', '+8 hours')
+FROM proxies p CROSS JOIN profiles;`
+		if _, err := tx.Exec(fixtureSQL); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("create 100k performance fixture: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("commit performance fixture: %v", err)
+		}
+		st.InvalidateStats()
+		count = 100000
+	}
+	fixtureDuration := time.Since(started)
+	t.Logf("performance fixture ready count=%d setup=%s", count, fixtureDuration)
+
+	st.InvalidateStats()
+	statsStarted := time.Now()
+	stats, err := st.Stats()
+	statsDuration := time.Since(statsStarted)
+	if err != nil || anyToInt(stats["total"]) != count {
+		t.Fatalf("100k stats failed: total=%v err=%v", stats["total"], err)
+	}
+	t.Logf("performance stats complete duration=%s", statsDuration)
+	cachedStarted := time.Now()
+	_, err = st.Stats()
+	cachedDuration := time.Since(cachedStarted)
+	if err != nil {
+		t.Fatalf("cached stats failed: %v", err)
+	}
+	pageStarted := time.Now()
+	_, _, err = st.ListProxies(proxyFilter{Status: "all", TargetProfile: "openai", Limit: 100, Offset: 50000})
+	pageDuration := time.Since(pageStarted)
+	if err != nil {
+		t.Fatalf("100k page query failed: %v", err)
+	}
+	candidateStarted := time.Now()
+	_, err = st.ListCheckCandidates("untested", 500, "openai")
+	candidateDuration := time.Since(candidateStarted)
+	if err != nil {
+		t.Fatalf("100k candidate query failed: %v", err)
+	}
+	gatewayStarted := time.Now()
+	_, err = st.GatewayUpstreamCandidates(availableProxyFilter{TargetProfile: "openai", Limit: 200})
+	gatewayDuration := time.Since(gatewayStarted)
+	if err != nil {
+		t.Fatalf("100k gateway query failed: %v", err)
+	}
+	t.Logf("performance count=%d fixture=%s stats=%s cached_stats=%s page=%s candidates=%s gateway=%s", count, fixtureDuration, statsDuration, cachedDuration, pageDuration, candidateDuration, gatewayDuration)
+	for name, duration := range map[string]time.Duration{
+		"stats": statsDuration, "page": pageDuration, "candidates": candidateDuration, "gateway": gatewayDuration,
+	} {
+		if duration > 10*time.Second {
+			t.Fatalf("%s query exceeded 10s acceptance: %s", name, duration)
+		}
+	}
+}
+
+func TestExternalExistingDatabasePerformance(t *testing.T) {
+	path := os.Getenv("PLC_TEST_EXISTING_DB")
+	if path == "" {
+		t.Skip("PLC_TEST_EXISTING_DB is not set")
+	}
+	st, err := openStore(path)
+	if err != nil {
+		t.Fatalf("open existing performance database: %v", err)
+	}
+	defer st.db.Close()
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure existing performance schema: %v", err)
+	}
+	var count int
+	_ = st.db.QueryRow("SELECT COUNT(*) FROM proxies").Scan(&count)
+	st.InvalidateStats()
+	statsStarted := time.Now()
+	_, err = st.Stats()
+	statsDuration := time.Since(statsStarted)
+	if err != nil {
+		t.Fatalf("existing stats: %v", err)
+	}
+	pageStarted := time.Now()
+	_, _, err = st.ListProxies(proxyFilter{Status: "all", TargetProfile: "openai", Limit: 100, Offset: maxInt(0, count/2)})
+	pageDuration := time.Since(pageStarted)
+	if err != nil {
+		t.Fatalf("existing page: %v", err)
+	}
+	candidateStarted := time.Now()
+	_, err = st.ListCheckCandidates("untested", 500, "openai")
+	candidateDuration := time.Since(candidateStarted)
+	if err != nil {
+		t.Fatalf("existing candidates: %v", err)
+	}
+	gatewayStarted := time.Now()
+	_, err = st.GatewayUpstreamCandidates(availableProxyFilter{TargetProfile: "openai", Limit: 200})
+	gatewayDuration := time.Since(gatewayStarted)
+	if err != nil {
+		t.Fatalf("existing gateway candidates: %v", err)
+	}
+	planStarted := time.Now()
+	candidatesByProfile := map[string][]ProxyTask{}
+	for _, profile := range targetProfileOrder {
+		items, err := st.ListCheckCandidates("all", 100000, profile)
+		if err != nil {
+			t.Fatalf("existing %s candidate plan: %v", profile, err)
+		}
+		candidatesByProfile[profile] = items
+	}
+	plans := buildProxyFirstCheckPlans(targetProfileOrder, candidatesByProfile)
+	planDuration := time.Since(planStarted)
+	if len(plans) != count {
+		t.Fatalf("proxy-first plan did not deduplicate real database: plans=%d proxies=%d", len(plans), count)
+	}
+	selectorStarted := time.Now()
+	gateway := newGatewayServer(st, gatewayConfig{Host: "127.0.0.1", Port: 0, TargetProfiles: []string{"grok"}, UpstreamLimit: 200})
+	endpoint := gateway.endpoints[0]
+	if err := endpoint.selector.refresh(gateway, true); err != nil {
+		t.Fatalf("load real gateway pool: %v", err)
+	}
+	for index := 0; index < 10000; index++ {
+		if _, err := endpoint.selector.next(gateway, nil); err != nil {
+			t.Fatalf("gateway in-memory pressure selection %d: %v", index, err)
+		}
+	}
+	selectorDuration := time.Since(selectorStarted)
+	t.Logf("existing performance count=%d stats=%s page=%s candidates=%s gateway=%s proxy_first_plan=%s gateway_10k_select=%s", count, statsDuration, pageDuration, candidateDuration, gatewayDuration, planDuration, selectorDuration)
 }

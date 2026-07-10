@@ -9,6 +9,7 @@ const state = {
   watchedJobId: null,
   pollTimer: null,
   gatewayTimer: null,
+  inFlightRequests: new Map(),
   sourceSelected: 0,
   proxies: {
     offset: 0,
@@ -56,7 +57,38 @@ function displayTimestamp(value, fallback = "-") {
   return Number.isNaN(date.getTime()) ? text : formatBeijingDate(date);
 }
 
+function freshnessText(payload, fallback = "") {
+  if (!payload) return fallback;
+  const cacheAge = Math.max(0, Number(payload.cache_age_ms || 0));
+  const generated = payload.generated_at ? displayTimestamp(payload.generated_at, "") : "";
+  const ageText = cacheAge < 1000 ? "刚更新" : cacheAge < 60000 ? `${Math.round(cacheAge / 1000)} 秒前` : `${Math.round(cacheAge / 60000)} 分钟前`;
+  return generated ? `${ageText} · ${generated}` : ageText;
+}
+
+function durationText(milliseconds) {
+  const value = Math.max(0, Number(milliseconds || 0));
+  if (value < 1000) return `${value} ms`;
+  if (value < 60000) return `${Math.round(value / 1000)} 秒`;
+  return `${Math.round(value / 60000)} 分钟`;
+}
+
 async function api(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  const requestKey = method === "GET" ? `${method}:${path}` : "";
+  if (requestKey && state.inFlightRequests.has(requestKey)) {
+    return state.inFlightRequests.get(requestKey);
+  }
+  const request = performAPIRequest(path, options);
+  if (!requestKey) return request;
+  state.inFlightRequests.set(requestKey, request);
+  try {
+    return await request;
+  } finally {
+    state.inFlightRequests.delete(requestKey);
+  }
+}
+
+async function performAPIRequest(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (!headers.has("Content-Type") && options.body) {
     headers.set("Content-Type", "application/json");
@@ -333,7 +365,10 @@ function renderStats(stats) {
   if (availableMetric) {
     const recordText = Number(stats.available_records || 0) > Number(stats.available || 0) ? `；记录 ${Number(stats.available_records || 0)}` : "";
     const transportText = `；基础链路可用 ${Number(stats.transport_available || 0)}`;
-    availableMetric.title = targetText ? `目标可用上游：${targetText}${recordText}${transportText}` : `暂无目标可用上游${transportText}`;
+    const freshText = freshnessText(stats);
+    availableMetric.title = targetText
+      ? `目标能力摘要：${targetText}${recordText}${transportText}；${freshText}`
+      : `暂无目标可用上游${transportText}；${freshText}`;
   }
 }
 
@@ -468,10 +503,17 @@ function renderGateway(gateway) {
   const limitText = upstreamLimit > 0 ? `单目标上限 ${upstreamLimit}` : "单目标上限未设置";
   const countryText = countrySummary(gateway.countries || state.settings?.gateway_countries || [], gateway.country_policy || state.settings?.gateway_country_policy);
   const isolationText = skippedSlots > 0 ? ` · 活跃 ${activeSlots} / 隔离 ${skippedSlots}` : "";
+  const closed = Number(gateway.closed_upstreams ?? profiles.reduce((total, item) => total + Number(item.closed_upstreams || 0), 0));
+  const open = Number(gateway.open_upstreams ?? profiles.reduce((total, item) => total + Number(item.open_upstreams || 0), 0));
+  const halfOpen = Number(gateway.half_open_upstreams ?? profiles.reduce((total, item) => total + Number(item.half_open_upstreams || 0), 0));
+  const circuitText = ` · 电路 ${closed}/${open}/${halfOpen}`;
+  const degradedText = gateway.degraded ? " · 降级选路" : "";
+  const poolAgeText = gateway.pool_age_ms != null ? ` · 池龄 ${durationText(gateway.pool_age_ms)}` : "";
+  const freshText = freshnessText(gateway);
   const totalRequests = Number(gateway.valid_requests ?? gateway.total_requests ?? profiles.reduce((total, item) => total + Number(item.valid_requests ?? item.total_requests ?? 0), 0));
   const totalConnections = Number(gateway.total_connections ?? profiles.reduce((total, item) => total + Number(item.total_connections || 0), 0));
   el("gatewaySummary").textContent = gateway.enabled
-    ? `${enabledProfiles.length} 个目标入口 · ${limitText} · ${countryText} · 已装载 ${loadedSlots} 个目标槽位${isolationText} · 唯一可用 ${uniqueAvailable} 个上游 · 有效请求 ${totalRequests} / 连接 ${totalConnections}`
+    ? `${enabledProfiles.length} 个目标入口 · ${limitText} · ${countryText} · 已装载 ${loadedSlots} 个目标槽位${isolationText}${circuitText}${degradedText}${poolAgeText} · 唯一可用 ${uniqueAvailable} 个上游 · 有效请求 ${totalRequests} / 连接 ${totalConnections} · ${freshText}`
     : "网关未启用";
   el("gatewayCards").innerHTML =
     profiles
@@ -578,6 +620,11 @@ function gatewayCardHTML(item, gatewayEnabled) {
   const totalConnections = Number(item.total_connections ?? validRequests);
   const rejectedRequests = Number(item.rejected_requests || 0);
   const upstreamAttempts = Number(item.upstream_attempts || 0);
+  const closedUpstreams = Number(item.closed_upstreams || 0);
+  const openUpstreams = Number(item.open_upstreams || 0);
+  const halfOpenUpstreams = Number(item.half_open_upstreams || 0);
+  const poolAge = durationText(item.pool_age_ms || 0);
+  const refreshError = String(item.last_refresh_error || "").trim();
   const recent = gatewayRecentRows(item)
     .map(
       (entry, index) => `
@@ -618,6 +665,9 @@ function gatewayCardHTML(item, gatewayEnabled) {
         <span>成功率 ${Math.round(Number(item.success_rate || 0) * 100)}%</span>
         <span>活跃 ${activeUpstreams}</span>
         <span>隔离 ${skippedUpstreams}</span>
+        <span>电路 ${closedUpstreams}/${openUpstreams}/${halfOpenUpstreams}</span>
+        <span>${item.degraded ? "降级" : "正常"}</span>
+        <span title="${escapeHtml(refreshError)}">池龄 ${escapeHtml(poolAge)}${refreshError ? " · 刷新异常" : ""}</span>
         <span>${escapeHtml(regionText)}</span>
         <span>${escapeHtml(gatewayStrategyLabel(item.upstream_strategy))}</span>
       </div>
@@ -891,8 +941,11 @@ async function watchJob(jobId) {
 
 function startPolling() {
   if (state.pollTimer) return;
+  if (document.hidden || el("appView").hidden) return;
   stopGatewayPolling();
   const poll = async () => {
+    state.pollTimer = null;
+    if (document.hidden || el("appView").hidden) return;
     try {
       let job = null;
       if (state.watchedJobId) {
@@ -904,12 +957,8 @@ function startPolling() {
         if (job) state.watchedJobId = String(job.id);
       }
       if (job && ["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) {
-        state.pollTimer = null;
         state.watchedJobId = null;
-        await loadStats();
-        await loadGateway();
-        await loadSettings();
-        await loadProxies();
+        await Promise.all([loadStats(), loadGateway(), loadSettings(), loadProxies()]);
         renderJobs([job]);
         if (job.status === "completed") {
           toast(job.message || "任务已完成", "success");
@@ -928,10 +977,6 @@ function startPolling() {
     } catch (error) {
       toast(error.message, "error");
     }
-    if (el("appView").hidden) {
-      state.pollTimer = null;
-      return;
-    }
     state.pollTimer = setTimeout(poll, 1200);
   };
   state.pollTimer = setTimeout(poll, 1200);
@@ -945,7 +990,10 @@ function stopJobPolling() {
 
 function startGatewayPolling() {
   if (state.gatewayTimer) return;
-  state.gatewayTimer = setInterval(async () => {
+  if (document.hidden || el("appView").hidden || state.pollTimer) return;
+  const poll = async () => {
+    state.gatewayTimer = null;
+    if (document.hidden || el("appView").hidden || state.pollTimer) return;
     try {
       await loadGateway();
       if (!state.pollTimer) {
@@ -958,13 +1006,39 @@ function startGatewayPolling() {
     } catch {
       // Avoid repeating toast noise when the session expires or the service restarts.
     }
-  }, 2000);
+    if (!state.pollTimer && !document.hidden && !el("appView").hidden) {
+      state.gatewayTimer = setTimeout(poll, 4000);
+    }
+  };
+  state.gatewayTimer = setTimeout(poll, 4000);
 }
 
 function stopGatewayPolling() {
   if (!state.gatewayTimer) return;
-  clearInterval(state.gatewayTimer);
+  clearTimeout(state.gatewayTimer);
   state.gatewayTimer = null;
+}
+
+function pausePollingForHiddenPage() {
+  if (state.pollTimer) clearTimeout(state.pollTimer);
+  state.pollTimer = null;
+  stopGatewayPolling();
+}
+
+async function resumeVisiblePolling() {
+  if (el("appView").hidden) return;
+  try {
+    const [jobs] = await Promise.all([loadActiveJobs(), loadStats(), loadGateway(), loadProxies()]);
+    const active = jobs[0] || null;
+    if (active) {
+      state.watchedJobId = String(active.id);
+      startPolling();
+      return;
+    }
+  } catch {
+    // A later explicit refresh or authentication flow will surface the error.
+  }
+  startGatewayPolling();
 }
 
 async function saveSettings(event) {
@@ -1091,12 +1165,7 @@ async function deleteFailed(event) {
 }
 
 async function refreshAll() {
-  await loadStats();
-  await loadGateway();
-  await loadGeoIP();
-  await loadActiveJobs();
-  await loadSettings();
-  await loadProxies();
+  await Promise.all([loadStats(), loadGateway(), loadGeoIP(), loadActiveJobs(), loadSettings(), loadProxies()]);
 }
 
 function updateExportLinks() {
@@ -1120,6 +1189,14 @@ function bindTargetSync(sourceId, targetId) {
 }
 
 function bindEvents() {
+	// Browser visibility controls polling globally so background tabs do not keep high-frequency API traffic alive.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      pausePollingForHiddenPage();
+      return;
+    }
+    resumeVisiblePolling();
+  });
   el("loginForm").addEventListener("submit", login);
   el("logoutBtn").addEventListener("click", () => {
     localStorage.removeItem("plc_token");

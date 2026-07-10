@@ -32,11 +32,13 @@ or asks for the next version, read these files before changing code:
 
 The current canonical sequence is:
 
-- released: `v0.3.4`
-- code complete, mandatory publication in progress: cumulative `v0.4.1`
-  containing the v0.4.0 state model and v0.4.1 persistent jobs/scheduler
-- next only after local 8899 acceptance and v0.4.1 GitHub release: `v0.4.2`
-  proxy-first checking and performance
+- released: cumulative `v0.4.1`, containing the v0.4.0 state model and v0.4.1
+  persistent jobs/scheduler
+- current implementation and mandatory publication stage: `v0.4.2` proxy-first
+  checking, cached GeoIP enrichment, aggregate stats, lock-free gateway refresh,
+  and frontend polling reduction
+- no later version may start until v0.4.2 passes the existing 8899 acceptance and
+  completes commit, push, annotated tag, GitHub Release, assets, CI, and GHCR
 
 Code, tests, CHANGELOG, release tags, the handoff document, and then the current
 roadmap are the truth order. Superseded design and progress documents have been

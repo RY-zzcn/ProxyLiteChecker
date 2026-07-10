@@ -1,6 +1,6 @@
 # ProxyLiteChecker v0.4.0 至 v0.4.2 详细开发路线图
 
-- 状态：v0.4.1 已完成本机 8899 验收和 GitHub 发布闭环；下一阶段为 v0.4.2
+- 状态：v0.4.2 实现与本机 8899 验收完成；当前工作包 `GITHUB-RELEASE`
 - 基线版本：`v0.3.4`
 - 基线提交：`73c6d4fb34f2e7898ee4b21bf9b3b9090b9f4d80`
 - 制定日期：2026-07-10
@@ -555,7 +555,7 @@ proxies
 
 ## 6. v0.4.2：检测、GeoIP、统计和网关性能
 
-- 状态：下一阶段，待开始 `V042-CHECK-PLAN`
+- 状态：进行中；当前工作包 `V042-CHECK-PLAN`
 - 主题：消除多目标重复工作，降低检测与状态查询开销
 - 前置条件：v0.4.1 完成事件和持久化调度已稳定
 - 路线终点：`v0.4.2`
@@ -578,27 +578,27 @@ proxies
 
 工作包 `V042-CHECK-PLAN`：
 
-- [ ] 将 `checkPlan` 从“一个目标的一批代理”改为“一个代理的一组目标”。
-- [ ] 候选查询合并重复代理 ID，并记录每个代理实际需要检测的目标集合。
-- [ ] 协议候选检测每个代理每轮只执行一次。
-- [ ] 出口 IP 查询每个代理每轮只执行一次，多个 endpoint 作为 fallback，不把全部成功当作必要条件。
-- [ ] 本地 MMDB 每个唯一出口 IP 只查询一次。
-- [ ] 目标 Web/API 探测复用已经建立的代理 client/transport，但避免跨不安全边界复用失效连接。
-- [ ] 多轮检测按“每轮一次基础探测 + 每轮各目标探测”执行，不再按目标重复基础轮次。
-- [ ] 每个代理内部目标并发设置小上限，防止全局并发乘以目标数造成文件描述符爆炸。
-- [ ] 取消时停止派发新代理，等待已进入保存阶段的结果完成一致性写入。
+- [x] 将 `checkPlan` 从“一个目标的一批代理”改为“一个代理的一组目标”。
+- [x] 候选查询合并重复代理 ID，并记录每个代理实际需要检测的目标集合。
+- [x] 协议候选检测每个代理每轮只执行一次。
+- [x] 出口 IP 查询每个代理每轮只执行一次，多个 endpoint 作为 fallback，不把全部成功当作必要条件。
+- [x] 本地 MMDB 每个唯一出口 IP 只查询一次。
+- [x] 目标 Web/API 探测复用已经建立的代理 client/transport，但避免跨不安全边界复用失效连接。
+- [x] 多轮检测按“每轮一次基础探测 + 每轮各目标探测”执行，不再按目标重复基础轮次。
+- [x] 每个代理内部目标并发设置小上限，防止全局并发乘以目标数造成文件描述符爆炸。
+- [x] 取消时停止派发新代理，等待已进入保存阶段的结果完成一致性写入。
 
 ### 6.3 结果写入流水线
 
 工作包 `V042-WRITER`：
 
-- [ ] 新增 `SaveProxyCheckBundle`，在一个事务中保存一个代理的 probe 和所有 target 结果。
-- [ ] 可选增加单 writer goroutine，将多个 bundle 按数量或短时间窗口批量提交。
-- [ ] 一次批量只对涉及的代理计算聚合兼容快照。
-- [ ] writer 队列必须有界；满时对检查 worker 施加背压，不丢结果、不无限增长内存。
-- [ ] 终态计数区分网络失败、持久化失败和已成功写入。
-- [ ] 取消后已经产生的结果必须写完或明确计入 `persistence_failed`。
-- [ ] SQLite busy/locked 使用有界重试和上下文取消，不能无限循环。
+- [x] 新增 `SaveProxyCheckBundle`，在一个事务中保存一个代理的 probe 和所有 target 结果。
+- [x] 可选增加单 writer goroutine，将多个 bundle 按数量或短时间窗口批量提交。（当前不启用额外 writer，直接由有界检查 worker 背压写入。）
+- [x] 一次批量只对涉及的代理计算聚合兼容快照。
+- [x] writer 队列必须有界；满时对检查 worker 施加背压，不丢结果、不无限增长内存。（当前无独立 writer 队列。）
+- [x] 终态计数区分网络失败、持久化失败和已成功写入。
+- [x] 取消后已经产生的结果必须写完或明确计入 `persistence_failed`。
+- [x] SQLite busy/locked 使用有界重试和上下文取消，不能无限循环。
 
 ### 6.4 GeoIP 与外部元数据缓存
 
@@ -617,75 +617,75 @@ proxies
 
 工作包 `V042-GEOIP`：
 
-- [ ] 本地 MMDB 继续同步查询，但不再在每个目标重复执行。
-- [ ] 外部 ASN/IP 类型查询从检测关键路径移到有界后台队列。
-- [ ] 同一个出口 IP 使用 singleflight 合并并发请求。
-- [ ] 增加全局速率限制，默认值必须低于公共 endpoint 的安全上限。
-- [ ] 缓存命中时不访问外部 endpoint；失败使用 `retry_after`。
-- [ ] 外部补充完成后只更新匹配出口 IP 的元数据，不改变代理或目标可用状态。
-- [ ] 修复首次 MMDB 加载失败后无法主动重试的问题。
-- [ ] 手动更新和自动更新使用同一互斥/状态机。
-- [ ] reader 查询期间保证旧 reader 不会被更新线程提前关闭。
-- [ ] 下载使用临时文件、校验打开成功后原子替换。
+- [x] 本地 MMDB 继续同步查询，但不再在每个目标重复执行。
+- [x] 外部 ASN/IP 类型查询从检测关键路径移到有界后台队列。
+- [x] 同一个出口 IP 使用 singleflight 合并并发请求。
+- [x] 增加全局速率限制，默认值必须低于公共 endpoint 的安全上限。
+- [x] 缓存命中时不访问外部 endpoint；失败使用 `retry_after`。
+- [x] 外部补充完成后只更新匹配出口 IP 的元数据，不改变代理或目标可用状态。
+- [x] 修复首次 MMDB 加载失败后无法主动重试的问题。
+- [x] 手动更新和自动更新使用同一互斥/状态机。
+- [x] reader 查询期间保证旧 reader 不会被更新线程提前关闭。
+- [x] 下载使用临时文件、校验打开成功后原子替换。
 
 ### 6.5 统计 SQL 和短缓存
 
 工作包 `V042-STATS`：
 
-- [ ] 将五个目标的状态与 grade 统计合并为一组 CTE/聚合查询。
-- [ ] 全局唯一目标可用代理尽量在 SQL 中去重，避免多次列表加载。
-- [ ] Stats 和 Gateway Status 增加 2–5 秒短缓存。
-- [ ] 写入、删除、导入、配置变化和网关池替换通过 generation 使相关缓存失效。
-- [ ] 缓存只保存聚合结果，不缓存包含认证信息的代理明细。
-- [ ] API 返回 `generated_at` 和可选 `cache_age_ms`，便于解释短暂延迟。
-- [ ] 为 20k、100k 代理规模记录查询计划，补齐必要索引。
+- [x] 将五个目标的状态与 grade 统计合并为一组 CTE/聚合查询。
+- [x] 全局唯一目标可用代理尽量在 SQL 中去重，避免多次列表加载。
+- [x] Stats 和 Gateway Status 增加 2–5 秒短缓存。
+- [x] 写入、删除、导入、配置变化和网关池替换通过 generation 使相关缓存失效。
+- [x] 缓存只保存聚合结果，不缓存包含认证信息的代理明细。
+- [x] API 返回 `generated_at` 和可选 `cache_age_ms`，便于解释短暂延迟。
+- [x] 为 20k、100k 代理规模记录查询计划，补齐必要索引。
 
 ### 6.6 网关 selector 锁外刷新
 
 工作包 `V042-GATEWAY`：
 
-- [ ] selector 在锁外读取数据库候选，在短锁内原子替换不可变池快照。
-- [ ] 配置增加 generation；慢查询返回后如果配置已变化，丢弃旧结果或按新配置重查。
-- [ ] 查询失败且已有池时继续使用旧池，并记录池年龄和刷新错误。
-- [ ] 池元素从 URL 字符串升级为包含检测延迟、成功率、检查时间和 target capability 的结构。
-- [ ] `lowest_latency` 结合最近检测延迟和网关运行期 EWMA 延迟。
-- [ ] `stability_first` 使用 EWMA 成功率/滑动统计，不因一次成功清空全部历史。
-- [ ] 隔离冷却结束进入 half-open，只允许有限探测请求。
-- [ ] 全池不可用时选择明确的降级候选，不再一次清空所有失败状态。
-- [ ] 状态 API 返回 closed/open/half-open 数量、degraded 标志、pool generation 和 pool age。
-- [ ] 慢数据库刷新不能阻塞已有池的上游选择，并用并发测试证明。
+- [x] selector 在锁外读取数据库候选，在短锁内原子替换不可变池快照。
+- [x] 配置增加 generation；慢查询返回后如果配置已变化，丢弃旧结果或按新配置重查。
+- [x] 查询失败且已有池时继续使用旧池，并记录池年龄和刷新错误。
+- [x] 池元素从 URL 字符串升级为包含检测延迟、成功率、检查时间和 target capability 的结构。
+- [x] `lowest_latency` 结合最近检测延迟和网关运行期 EWMA 延迟。
+- [x] `stability_first` 使用 EWMA 成功率/滑动统计，不因一次成功清空全部历史。
+- [x] 隔离冷却结束进入 half-open，只允许有限探测请求。
+- [x] 全池不可用时选择明确的降级候选，不再一次清空所有失败状态。
+- [x] 状态 API 返回 closed/open/half-open 数量、degraded 标志、pool generation 和 pool age。
+- [x] 慢数据库刷新不能阻塞已有池的上游选择，并用并发测试证明。
 
 ### 6.7 Web 轮询和可观测性降载
 
 工作包 `V042-WEB`：
 
-- [ ] 任务运行时继续按 job ID 轮询，不同时重复请求完整 bootstrap。
-- [ ] 任务轮询期间暂停或降低普通 stats/gateway/settings 轮询频率。
-- [ ] 页面隐藏时停止高频轮询，恢复可见时立即刷新一次。
-- [ ] 同一资源同一时刻只允许一个未完成请求，避免重叠轮询。
-- [ ] 使用服务端 `generated_at/cache_age_ms` 展示状态新鲜度。
-- [ ] 展示基础状态与目标能力矩阵的紧凑摘要。
-- [ ] 展示调度 pending、backoff、blocking job 和最近真实终态。
-- [ ] 展示网关池年龄、隔离/半开数量、刷新错误和降级模式。
-- [ ] 保持无前端构建步骤，不引入大型框架。
+- [x] 任务运行时继续按 job ID 轮询，不同时重复请求完整 bootstrap。
+- [x] 任务轮询期间暂停或降低普通 stats/gateway/settings 轮询频率。
+- [x] 页面隐藏时停止高频轮询，恢复可见时立即刷新一次。
+- [x] 同一资源同一时刻只允许一个未完成请求，避免重叠轮询。
+- [x] 使用服务端 `generated_at/cache_age_ms` 展示状态新鲜度。
+- [x] 展示基础状态与目标能力矩阵的紧凑摘要。
+- [x] 展示调度 pending、backoff、blocking job 和最近真实终态。
+- [x] 展示网关池年龄、隔离/半开数量、刷新错误和降级模式。
+- [x] 保持无前端构建步骤，不引入大型框架。
 
 ### 6.8 性能与可靠性验收
 
 工作包 `V042-PERF-TEST`：
 
-- [ ] 单代理五目标测试证明基础协议探测和出口 IP 探测每轮只执行一次。
-- [ ] 多轮测试证明基础请求数不再乘以目标数。
-- [ ] 同出口 IP 的并发 GeoIP 补充只发出一个外部请求。
-- [ ] GeoIP 限速、缓存 TTL、失败退避和队列满背压测试。
-- [ ] MMDB 首次失败后重试、手动/自动更新互斥和 reader 生命周期竞态测试。
-- [ ] 批量保存原子性、部分失败和取消收尾测试。
-- [ ] 慢 SQLite 查询期间网关仍能从旧池选路测试。
-- [ ] EWMA、half-open、全池降级和配置 generation 测试。
-- [ ] Stats 聚合结果与旧多查询实现对照一致性测试。
-- [ ] 前端无重叠轮询的可执行浏览器冒烟测试。
-- [ ] 20k 真实备份检测和网关压测。
-- [ ] 构造 100k 代理数据库执行统计、分页、候选和迁移基准。
-- [ ] `go test ./...`、`go vet ./...`、`go test -race -count=1 ./...`。
+- [x] 单代理五目标测试证明基础协议探测和出口 IP 探测每轮只执行一次。
+- [x] 多轮测试证明基础请求数不再乘以目标数。
+- [x] 同出口 IP 的并发 GeoIP 补充只发出一个外部请求。
+- [x] GeoIP 限速、缓存 TTL、失败退避和队列满背压测试。
+- [x] MMDB 首次失败后重试、手动/自动更新互斥和 reader 生命周期竞态测试。
+- [x] 批量保存原子性、部分失败和取消收尾测试。
+- [x] 慢 SQLite 查询期间网关仍能从旧池选路测试。
+- [x] EWMA、half-open、全池降级和配置 generation 测试。
+- [x] Stats 聚合结果与旧多查询实现对照一致性测试。
+- [x] 前端无重叠轮询的可执行浏览器冒烟测试。
+- [x] 20k 真实备份检测和网关压测。
+- [x] 构造 100k 代理数据库执行统计、分页、候选和迁移基准。
+- [x] `go test ./...`、`go vet ./...`、`go test -race -count=1 ./...`。
 
 建议验收指标：
 
@@ -698,16 +698,16 @@ proxies
 
 ### 6.9 v0.4.2 完成定义
 
-- [ ] 多目标检测已经是代理优先执行。
-- [ ] 基础探测、出口 IP 和本地 GeoIP 不再按目标重复。
-- [ ] 外部 IP 元数据不阻塞检测终态。
-- [ ] probe 和全部目标结果可以原子保存。
-- [ ] 调度器能使用 v0.4.1 的完成事件串联拉取与检测。
-- [ ] 统计查询已聚合并有短缓存和失效机制。
-- [ ] 网关数据库刷新在锁外完成，并具备 EWMA、half-open 和降级语义。
-- [ ] 前端轮询不重叠，任务期间不会重复刷新全部资源。
-- [ ] 从 v0.3.4 直接升级至 v0.4.2 的迁移链完整通过。
-- [ ] README、部署文档、API 说明、CHANGELOG 和接手文档全部更新。
+- [x] 多目标检测已经是代理优先执行。
+- [x] 基础探测、出口 IP 和本地 GeoIP 不再按目标重复。
+- [x] 外部 IP 元数据不阻塞检测终态。
+- [x] probe 和全部目标结果可以原子保存。
+- [x] 调度器能使用 v0.4.1 的完成事件串联拉取与检测。
+- [x] 统计查询已聚合并有短缓存和失效机制。
+- [x] 网关数据库刷新在锁外完成，并具备 EWMA、half-open 和降级语义。
+- [x] 前端轮询不重叠，任务期间不会重复刷新全部资源。
+- [x] 从 v0.3.4 直接升级至 v0.4.2 的迁移链完整通过。
+- [x] README、部署文档、API 说明、CHANGELOG 和接手文档全部更新。
 - [ ] GitHub CI、Release 和 GHCR 多架构发布成功后，将本路线图状态改为“已完成”。
 
 ### 6.10 v0.4.2 回滚和范围外事项
@@ -918,3 +918,136 @@ GitHub 发布：
 - 当前工作包：`v0.4.2 / V042-CHECK-PLAN`。
 - 当前阻塞：无。
 - 唯一下一步：先补代理优先检测的计划与兼容测试，再开始 v0.4.2 实现。
+
+日期：2026-07-10 15:02 Asia/Shanghai
+
+版本：v0.4.2
+
+状态：进行中；当前工作包 `V042-CHECK-PLAN`
+
+- 最近完成：读取 v0.4.2 路线图并确认代理优先检测计划是第一个未完成工作包。
+- 准备执行：运行基线测试，审计 `checkPlan`、候选查询、基础/目标探测和保存路径，先增加单代理多目标及多轮请求计数测试。
+- 当前阻塞：无。
+- 唯一下一步：完成基线测试和当前目标优先检查器结构审计。
+
+- 断点更新：`V042-CHECK-PLAN` 已实现；计划按代理 ID 合并目标集合，每轮基础/出口只执行一次，目标共享 client/transport，内部目标并发固定上限 3，唯一出口 GeoIP 使用任务级合并缓存，取消停止新派发并排空已开始结果。
+- 已通过验证：候选合并、五目标两轮基础请求计数、exit fallback、唯一出口 GeoIP 和目标并发上限测试；`go test -count=1 ./cmd/proxylite` 通过。
+- 准备执行：全量 test、vet 和 race；通过后进入 `V042-WRITER`。
+- 当前阻塞：无。
+- 唯一下一步：完成 V042-CHECK-PLAN 全量、vet 和 race 验证。
+
+- 断点更新：全量 test、vet 和 race 均通过，`V042-CHECK-PLAN` 验证完成。
+- 当前工作包：`V042-WRITER`。
+- 准备执行：抽取现有单结果事务写入逻辑，新增 `SaveProxyCheckBundle`，保证单代理 probe 与全部 target 原子提交并补回滚测试。
+- 当前阻塞：无。
+- 唯一下一步：实现单代理 probe + 多 target 原子保存接口。
+
+- 断点更新：`V042-WRITER` 已实现。`SaveProxyCheckBundleContext` 单事务写入 probe、多 target、兼容影子和一次聚合；bundle 失败整体回滚，probe 连续失败每 bundle 只递增一次；busy/locked 有界重试并支持 context 取消。检查任务新增 `network_failed/persistence_failed/persisted` 终态计数。
+- 已通过验证：bundle 原子回滚、单次 probe 更新、取消 context 和现有状态写入回归；`go test -count=1 ./cmd/proxylite` 通过。
+- 准备执行：全量 test、vet、race；通过后进入 `V042-GEOIP`。
+- 当前阻塞：无。
+- 唯一下一步：完成 V042-WRITER 全量、vet 和 race 验证。
+
+- 断点更新：`V042-WRITER` 全量 test、vet、race 和差异检查通过。
+- 当前工作包：`V042-GEOIP`。
+- 准备执行：审计 `internal/checkmeta` reader 生命周期和更新互斥；新增 `ip_geo_cache` migration、有界后台 enrichment、TTL/退避与 singleflight 测试。
+- 当前阻塞：无。
+- 唯一下一步：完成现有 GeoIP 生命周期与调用路径审计。
+
+- 断点更新：`V042-GEOIP` 已实现。schema `402001` 新增 `ip_geo_cache`；检测同步读取缓存/本地 MMDB，外部 ASN/IP 类型使用有界队列、同 IP 合并、限速、TTL 和 retry_after 后台补充。metadata 更新不改变可用状态；MMDB 初始化重试、更新互斥和 reader 生命周期已修复。
+- 已通过验证：migration 幂等、缓存 TTL、失败退避、singleflight、队列满、限速、非阻塞检测、metadata-only 更新和初始化失败重试。
+- 准备执行：全量 test、vet、race；通过后进入 `V042-STATS`。
+- 当前阻塞：无。
+- 唯一下一步：完成 V042-GEOIP 全量、vet 和 race 验证。
+
+- 断点更新：`V042-GEOIP` 全量 test、vet、race 和差异检查通过。
+- 当前工作包：`V042-STATS`。
+- 准备执行：审计 Stats/目标聚合/gateway status 查询次数和写入入口，增加聚合 SQL、短缓存、generation 失效和一致性测试。
+- 当前阻塞：无。
+- 唯一下一步：完成统计与 gateway status 当前查询路径审计。
+
+- 断点更新：Stats 已合并为 3 组聚合 SQL，并与 Gateway Status 一起使用 3 秒短缓存；写入/导入/删除/TTL/GeoIP 更新、gateway 配置和 store generation 会失效。API 已增加 `generated_at/cache_age_ms`。
+- 已通过验证：Stats cache 命中与写入失效、Gateway cache 命中与 config/store generation 失效。
+- 剩余：网关池原子替换 generation 随 `V042-GATEWAY` 完成；20k/100k 查询计划随性能验收记录。
+- 准备执行：全量 test、vet、race；通过后进入 `V042-GATEWAY`。
+- 当前阻塞：无。
+- 唯一下一步：完成 V042-STATS 全量、vet 和 race 验证。
+
+- 断点更新：`V042-STATS` 全量 test、vet 和分包 race 通过。
+- 当前工作包：`V042-GATEWAY`。
+- 准备执行：selector 锁外候选加载和原子池替换、配置 generation、EWMA、half-open、degraded 状态与慢查询并发测试。
+- 当前阻塞：无。
+- 唯一下一步：实现不可变上游池快照与锁外刷新。
+
+- 断点更新：`V042-GATEWAY` 已实现。锁外 loader + generation 原子池替换；失败保留旧池；候选包含检测质量快照；lowest-latency/stability 使用运行 EWMA；half-open 单探测；全池 open 使用 degraded 候选；状态 API 增加电路与池新鲜度字段。
+- 已通过验证：慢刷新旧池选路、原子替换、刷新失败保留、half-open、EWMA 和 degraded 测试。
+- 准备执行：全量 test、vet、race；通过后进入 `V042-WEB`。
+- 当前阻塞：无。
+- 唯一下一步：完成 V042-GATEWAY 全量、vet 和 race 验证。
+
+- 断点更新：`V042-GATEWAY` 全量 test、vet 和分组 race 通过。
+- 当前工作包：`V042-WEB`。
+- 准备执行：审计前端轮询/请求重叠，实现资源级 in-flight、页面可见性暂停、任务期间降频与新鲜度/池诊断展示。
+- 当前阻塞：无。
+- 唯一下一步：完成前端轮询与请求入口审计。
+
+- 断点更新：`V042-WEB` 已实现。GET in-flight 合并、job ID 独立轮询、任务期间普通轮询暂停、隐藏页暂停/可见恢复刷新、递归 timeout 防重叠，以及新鲜度/能力/网关池诊断展示均完成。
+- 已通过验证：前端 `node --check`。
+- 准备执行：Go 全量 test/vet/race、前端语法和差异检查；通过后进入 `V042-PERF-TEST`。
+- 当前阻塞：无。
+- 唯一下一步：完成 V042-WEB 自动化验证。
+
+- 断点更新：`V042-WEB` 全量 test、vet、node、差异检查和分组 race 通过。
+- 当前工作包：`V042-PERF-TEST`。
+- 准备执行：运行数据备份副本 migration、20k/100k 查询计划与时延、浏览器轮询冒烟和交叉编译。
+- 当前阻塞：无。
+- 唯一下一步：完成性能验收基线与数据库副本准备。
+
+- 断点更新：真实 v0.3.4 副本迁移到 402001 后保持 19,457 identities/probes、1,581 targets，integrity ok、FK 0。19.5k Stats/分页/候选/网关分别 108/668/108/153ms，proxy-first 五目标计划 3.65s，selector 10k 次 124ms。
+- 100k/500k target 基准：Stats 4.55s、cache 6.8µs、offset 50k page 6.20s、candidate 554ms、gateway 1.31s。目标聚合使用 covering `idx_proxy_target_stats`，唯一计数使用 proxy_id/status 索引。
+- 准备执行：版本与文档升级、最终自动化、现有 8899 更新及浏览器无重叠轮询冒烟。
+- 当前阻塞：无。
+- 唯一下一步：完成 v0.4.2 版本与发布文档更新。
+
+- 断点更新：版本、CHANGELOG、README、部署说明、AGENTS 和发布文件已统一到 `0.4.2`，版本一致性检查通过。
+- 准备执行：preflight、全量/vet/分组 race、node、交叉编译和差异检查。
+- 当前阻塞：最终 preflight 发现 Stats 唯一可用数按 proxy identity 计数，未合并“不同原始协议、相同最终 detected protocol”的规范化 URL；定向修复进行中。
+- 唯一下一步：用单次聚合 CTE 恢复每目标和全局规范化 URL 去重，运行定向测试、全量 preflight 与 100k 性能回归。
+
+- 断点更新：Stats 已用单次 CTE 按最终协议、凭据、规范化 IP 和端口同时计算每目标及全局唯一 URL；`available_records` 继续保留原始可用记录数。定向回归测试通过，并补充 OpenAI 目标与全局唯一数断言。
+- 准备执行：`go test -count=1 ./...`、`./scripts/preflight_check.sh`，通过后重跑 100k 外部数据库性能测试。
+- 当前阻塞：无。
+- 唯一下一步：完成全量自动化和 100k Stats 性能回归。
+
+- 断点更新：规范化 URL 去重修复后的 `go test -count=1 ./...` 与 `./scripts/preflight_check.sh` 均通过。
+- 正在执行：`PLC_TEST_PERF_DB=/root/.cache/proxylite-v042-perf.db go test -count=1 -run TestExternalDatabasePerformance -v ./cmd/proxylite`。
+- 当前阻塞：无。
+- 唯一下一步：确认 100k Stats 正确性修复后的性能仍满足验收线，然后执行最终 race/node/cross-build/diff 门禁。
+
+- 断点更新：100k proxies / 500k target states 性能回归通过；修复后 Stats 8.48s、缓存命中 6.7µs、深分页 4.90s、候选 641ms、网关候选 1.80s，仍低于 10 秒验收线。`go vet`、前端 node 语法、Windows amd64/Linux arm64 交叉编译和 `git diff --check` 已通过。
+- 正在执行：`TMPDIR=/root/.cache go test -race -count=1 ./...`；通过后构建正式 `bin/proxylite` 并更新现有 8899 服务。
+- 当前阻塞：无。
+- 唯一下一步：完成最终 race 门禁。
+
+- 断点更新：`TMPDIR=/root/.cache go test -race -count=1 ./...` 全包通过；发布前自动化门禁完成。
+- 当前工作包：`v0.4.2 / LOCAL-8899-RELEASE`。
+- 准备执行：构建 `bin/proxylite`，审计现有 8899 PID/启动方式，停止旧 PID 后仅依赖宿主现有机制在同一端口拉起新版本。
+- 当前阻塞：无。
+- 唯一下一步：更新并验收现有 `127.0.0.1:8899` 部署。
+
+- 断点更新：正式 `bin/proxylite` 已构建；停止旧 PID `868716` 后宿主现有机制在同一 8899 端口拉起 PID `984050`，`/health` 返回 `0.4.2`，未启动第二套服务。
+- 8899 验收：默认管理员登录、bootstrap/stats/jobs/scheduler/gateway/proxies API 通过；Stats 返回 `generated_at/cache_age_ms` 和目标唯一/记录计数，代理返回 `probe/target_summary`；Gateway 返回 pool generation/age、closed/open/half-open/degraded。数据库 schema `402001`、integrity `ok`、FK 错误 0；18080–18089 全部监听；Grok HTTP 18084 和 SOCKS5 18085 实际请求均返回 200。
+- 正在执行：headless Chromium 验证 Web 新诊断字段、页面隐藏/恢复逻辑和 GET 请求无重叠；通过后勾选自动化与完成定义，进入 GitHub 发布。
+- 当前阻塞：无。
+- 唯一下一步：完成现有 8899 的浏览器冒烟。
+
+- 断点更新：现有 8899 的 headless Chromium 冒烟通过。页面显示 v0.4.2、目标能力摘要、缓存新鲜度、5 个网关卡片、电路 182/0/0 与池龄，横向溢出 0；三次并发 Stats/Gateway 调用各只产生 1 个 GET，所有 API 最大并发均为 1；轮询启动、隐藏暂停、恢复可见刷新与重新调度均通过。截图：`/tmp/proxylite-v042.png`。
+- 当前工作包：`v0.4.2 / GITHUB-RELEASE`。
+- 准备执行：最终审计差异与工作区，创建发布提交并推送 `main`；创建 annotated `v0.4.2` tag 并推送；监控 CI、Release 与 Docker 工作流。
+- 当前阻塞：无。
+- 唯一下一步：提交并推送 v0.4.2 发布变更。
+
+- 断点更新：浏览器冒烟后的最终 `./scripts/preflight_check.sh` 与 `git diff --check` 再次通过；提交审计确认只包含 v0.4.2 代码、测试和文档，不包含运行数据库、备份、二进制或临时截图。
+- 正在执行：`git add`、创建 v0.4.2 发布提交并推送 `main`。
+- 当前阻塞：无。
+- 唯一下一步：推送发布提交后创建并推送 annotated `v0.4.2` tag。

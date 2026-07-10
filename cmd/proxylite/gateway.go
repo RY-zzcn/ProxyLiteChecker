@@ -41,14 +41,21 @@ type gatewayConfig struct {
 type gatewayDialFunc func(ctx context.Context, proxyURL string, target string, timeout time.Duration) (net.Conn, error)
 
 type gatewayServer struct {
-	store     *store
-	mu        sync.RWMutex
-	cfg       gatewayConfig
-	endpoints []*gatewayEndpoint
-	startedAt string
-	dialProxy gatewayDialFunc
-	eventMu   sync.Mutex
-	events    []gatewayEvent
+	store         *store
+	mu            sync.RWMutex
+	cfg           gatewayConfig
+	endpoints     []*gatewayEndpoint
+	startedAt     string
+	dialProxy     gatewayDialFunc
+	loadUpstreams func(availableProxyFilter) ([]gatewayUpstream, error)
+	eventMu       sync.Mutex
+	events        []gatewayEvent
+	statusMu      sync.Mutex
+	statusAt      time.Time
+	statusGen     uint64
+	cacheGen      uint64
+	storeGen      uint64
+	status        map[string]any
 }
 
 const (
@@ -94,6 +101,9 @@ func newGatewayServer(store *store, cfg gatewayConfig) *gatewayServer {
 	cfg = normalizeGatewayConfig(cfg)
 	profiles := normalizeTargetProfiles(cfg.TargetProfiles)
 	gateway := &gatewayServer{store: store, cfg: cfg, startedAt: nowString(), dialProxy: dialThroughProxy}
+	if store != nil {
+		gateway.loadUpstreams = store.GatewayUpstreamCandidates
+	}
 	for index, profile := range profiles {
 		endpoint := &gatewayEndpoint{
 			TargetProfile: profile,
@@ -131,8 +141,10 @@ func (g *gatewayServer) ApplyRuntimeConfig(cfg gatewayConfig) gatewayConfig {
 	g.mu.Lock()
 	g.cfg = current
 	g.mu.Unlock()
+	g.invalidateStatus()
 	for _, endpoint := range g.endpoints {
 		if endpoint.selector != nil {
+			endpoint.selector.updateConfig(current)
 			_ = endpoint.selector.refresh(g, true)
 		}
 	}
@@ -204,6 +216,37 @@ func (g *gatewayServer) serveSocks5Gateway(endpoint *gatewayEndpoint, listener n
 }
 
 func (g *gatewayServer) Status() map[string]any {
+	storeGeneration := uint64(0)
+	if g.store != nil {
+		storeGeneration = g.store.StatsGeneration()
+	}
+	g.statusMu.Lock()
+	defer g.statusMu.Unlock()
+	now := time.Now()
+	if g.status != nil && g.cacheGen == g.statusGen && g.storeGen == storeGeneration && now.Sub(g.statusAt) < aggregateStatsCacheTTL {
+		cached := cloneMap(g.status)
+		cached["cache_age_ms"] = now.Sub(g.statusAt).Milliseconds()
+		return cached
+	}
+	status := g.statusUncached(now)
+	g.status = cloneMap(status)
+	g.statusAt = now
+	g.cacheGen = g.statusGen
+	g.storeGen = storeGeneration
+	return status
+}
+
+func (g *gatewayServer) invalidateStatus() {
+	if g == nil {
+		return
+	}
+	g.statusMu.Lock()
+	g.statusGen++
+	g.status = nil
+	g.statusMu.Unlock()
+}
+
+func (g *gatewayServer) statusUncached(now time.Time) map[string]any {
 	cfg := g.configSnapshot()
 	profiles := make([]map[string]any, 0, len(g.endpoints))
 	totalConnections := int64(0)
@@ -215,6 +258,12 @@ func (g *gatewayServer) Status() map[string]any {
 	upstreamCount := 0
 	activeUpstreamCount := 0
 	skippedUpstreamCount := 0
+	closedUpstreamCount := 0
+	openUpstreamCount := 0
+	halfOpenUpstreamCount := 0
+	degraded := false
+	poolGeneration := uint64(0)
+	poolAgeMS := int64(0)
 	targetAvailableUpstreamCount := 0
 	targetProfiles := make([]string, 0, len(g.endpoints))
 	for _, endpoint := range g.endpoints {
@@ -230,6 +279,18 @@ func (g *gatewayServer) Status() map[string]any {
 		upstreamCount += anyToInt(item["upstreams"])
 		activeUpstreamCount += anyToInt(item["active_upstreams"])
 		skippedUpstreamCount += anyToInt(item["skipped_upstreams"])
+		closedUpstreamCount += anyToInt(item["closed_upstreams"])
+		openUpstreamCount += anyToInt(item["open_upstreams"])
+		halfOpenUpstreamCount += anyToInt(item["half_open_upstreams"])
+		if value, ok := item["degraded"].(bool); ok && value {
+			degraded = true
+		}
+		if generation, ok := item["pool_generation"].(uint64); ok && generation > poolGeneration {
+			poolGeneration = generation
+		}
+		if age := int64(anyToInt(item["pool_age_ms"])); age > poolAgeMS {
+			poolAgeMS = age
+		}
 		targetAvailableUpstreamCount += anyToInt(item["available_upstreams"])
 	}
 	uniqueAvailableUpstreamCount := targetAvailableUpstreamCount
@@ -263,6 +324,12 @@ func (g *gatewayServer) Status() map[string]any {
 		"loaded_upstreams":           upstreamCount,
 		"active_upstreams":           activeUpstreamCount,
 		"skipped_upstreams":          skippedUpstreamCount,
+		"closed_upstreams":           closedUpstreamCount,
+		"open_upstreams":             openUpstreamCount,
+		"half_open_upstreams":        halfOpenUpstreamCount,
+		"degraded":                   degraded,
+		"pool_generation":            poolGeneration,
+		"pool_age_ms":                poolAgeMS,
 		"available_upstreams":        uniqueAvailableUpstreamCount,
 		"unique_available_upstreams": uniqueAvailableUpstreamCount,
 		"target_available_upstreams": targetAvailableUpstreamCount,
@@ -289,6 +356,8 @@ func (g *gatewayServer) Status() map[string]any {
 		"events":                     g.eventSnapshot(),
 		"profiles":                   profiles,
 		"started_at":                 g.startedAt,
+		"generated_at":               formatBeijingTime(now),
+		"cache_age_ms":               int64(0),
 	}
 }
 
@@ -354,6 +423,12 @@ func (g *gatewayServer) endpointStatus(endpoint *gatewayEndpoint) map[string]any
 		"last_refresh_at":          selectorSnapshot.LastRefreshAt,
 		"last_refresh_error":       selectorSnapshot.LastRefreshError,
 		"last_all_released_at":     selectorSnapshot.LastAllReleasedAt,
+		"closed_upstreams":         selectorSnapshot.Closed,
+		"open_upstreams":           selectorSnapshot.Open,
+		"half_open_upstreams":      selectorSnapshot.HalfOpen,
+		"degraded":                 selectorSnapshot.Degraded,
+		"pool_generation":          selectorSnapshot.PoolGeneration,
+		"pool_age_ms":              selectorSnapshot.PoolAgeMS,
 		"total_connections":        totalConnections,
 		"total_requests":           valid,
 		"valid_requests":           valid,
@@ -460,7 +535,7 @@ func (g *gatewayServer) handleForward(w http.ResponseWriter, r *http.Request, en
 		copyHeader(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
-		endpoint.recordSuccess(upstream)
+		endpoint.recordSuccess(upstream, time.Since(started))
 		return
 	}
 	if lastErr == nil {
@@ -543,7 +618,7 @@ func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request, en
 		return
 	}
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	endpoint.recordSuccess(upstream)
+	endpoint.recordSuccess(upstream, time.Since(started))
 	pipeBidirectional(clientConn, upstreamConn)
 }
 
@@ -569,7 +644,11 @@ func (g *gatewayServer) refreshEndpointUpstreams(endpoint *gatewayEndpoint, forc
 	if endpoint.selector == nil {
 		return fmt.Errorf("gateway selector unavailable")
 	}
-	return endpoint.selector.refresh(g, force)
+	err := endpoint.selector.refresh(g, force)
+	if err == nil {
+		g.invalidateStatus()
+	}
+	return err
 }
 
 func (g *gatewayServer) endpointSelectorSnapshot(endpoint *gatewayEndpoint) gatewaySelectorSnapshot {
@@ -637,10 +716,10 @@ func (g *gatewayServer) openTunnelWithRetry(ctx context.Context, endpoint *gatew
 	return nil, lastUpstream, fmt.Errorf("gateway upstream dial failed after %d attempt(s): %w", len(tried), lastErr)
 }
 
-func (e *gatewayEndpoint) recordSuccess(upstream string) {
+func (e *gatewayEndpoint) recordSuccess(upstream string, latency time.Duration) {
 	atomic.AddInt64(&e.successRequests, 1)
 	if e.selector != nil {
-		e.selector.reportSuccess(upstream)
+		e.selector.reportSuccess(upstream, latency)
 	}
 	e.lastUpstream.Store(maskProxyURL(upstream))
 	e.lastError.Store("")
@@ -762,7 +841,7 @@ func (g *gatewayServer) handleSocks5Conn(client net.Conn, endpoint *gatewayEndpo
 		return
 	}
 	_ = client.SetDeadline(time.Time{})
-	endpoint.recordSuccess(upstream)
+	endpoint.recordSuccess(upstream, time.Since(started))
 	pipeBidirectional(client, upstreamConn)
 }
 

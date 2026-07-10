@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	appVersion           = "0.4.1"
+	appVersion           = "0.4.2"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -67,6 +67,7 @@ type server struct {
 	coordinator *workCoordinator
 	gateway     *gatewayServer
 	scheduler   *scheduler
+	geoEnricher *geoEnricher
 }
 
 type loginRequest struct {
@@ -228,6 +229,8 @@ func newServer(cfg config) *server {
 		log.Fatalf("ensure settings schema failed: %v", err)
 	}
 	srv := &server{cfg: cfg, mux: http.NewServeMux(), store: st}
+	srv.geoEnricher = newGeoEnricher(st)
+	srv.geoEnricher.Start()
 	srv.jobs = newJobManager(st)
 	srv.coordinator = newWorkCoordinator(st)
 	srv.scheduler = newScheduler(srv)

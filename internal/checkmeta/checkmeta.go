@@ -49,8 +49,10 @@ type GeoIPStatus struct {
 
 type geoIPReaders struct {
 	mu             sync.RWMutex
-	initOnce       sync.Once
+	initMu         sync.Mutex
+	initialized    bool
 	updateOnce     sync.Once
+	updateMu       sync.Mutex
 	enabled        bool
 	country        *geoip2.Reader
 	countryPath    string
@@ -65,6 +67,7 @@ type geoIPReaders struct {
 }
 
 var geoIP = &geoIPReaders{enabled: true}
+var loadGeoIPDatabasesFromEnv = LoadGeoIPDatabasesFromEnv
 
 func DetectCloudflareStatus(statusCode int, headers http.Header, body string) string {
 	server := strings.ToLower(headers.Get("Server"))
@@ -253,9 +256,9 @@ func LookupGeoIP(ip string) (Metadata, bool) {
 		return Metadata{}, false
 	}
 	geoIP.mu.RLock()
+	defer geoIP.mu.RUnlock()
 	reader := geoIP.country
 	enabled := geoIP.enabled
-	geoIP.mu.RUnlock()
 	if !enabled || reader == nil {
 		return Metadata{}, false
 	}
@@ -277,11 +280,16 @@ func LookupGeoIP(ip string) (Metadata, bool) {
 }
 
 func InitializeGeoIPDatabasesFromEnv() error {
-	var loadErr error
-	geoIP.initOnce.Do(func() {
-		loadErr = LoadGeoIPDatabasesFromEnv()
-	})
-	return loadErr
+	geoIP.initMu.Lock()
+	defer geoIP.initMu.Unlock()
+	if geoIP.initialized {
+		return nil
+	}
+	if err := loadGeoIPDatabasesFromEnv(); err != nil {
+		return err
+	}
+	geoIP.initialized = true
+	return nil
 }
 
 func LoadGeoIPDatabasesFromEnv() error {
@@ -350,6 +358,8 @@ func StartGeoIPAutoUpdateFromEnv() {
 }
 
 func UpdateGeoIPDatabaseFromEnv() error {
+	geoIP.updateMu.Lock()
+	defer geoIP.updateMu.Unlock()
 	cfg := geoIPConfigFromEnv()
 	if !cfg.Enabled || cfg.CountryPath == "" || cfg.CountryURL == "" {
 		return nil

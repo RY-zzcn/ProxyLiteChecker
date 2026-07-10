@@ -94,6 +94,10 @@ SECRET_KEY=请改成强随机字符串
 
 `v0.4.1` 起，任务历史和自动调度状态保存在 SQLite。服务重启会把上次未完成任务标记为 `interrupted`，任务 ID 不会重新从 1 开始；自动任务根据真实完成、部分成功、失败、取消或中断结果计算下次运行和退避。目标低库存可以优先检测已有候选，候选不足时再补源，并在确有新增代理时创建带父任务 ID 的后续检测。
 
+`v0.4.2` 起，多目标检测改为代理优先：同一代理每轮只执行一次协议选择、出口 IP 和本地 GeoIP，再复用 client/transport 检测所选目标，并在一个事务中保存 probe 与全部 target 结果。外部 ASN/IP 类型补充通过有界后台队列和 SQLite 缓存异步完成，不再阻塞检测终态。
+
+Stats 和网关状态使用 3 秒短缓存并返回 `generated_at/cache_age_ms`。网关候选在 selector 锁外加载，慢查询或刷新失败时继续使用旧池；运行时策略结合检测快照与 EWMA，隔离冷却后只允许单个 half-open 探测，全池异常时会明确标记 degraded。
+
 任务历史可通过 `GET /api/jobs?limit=&type=&status=&before_id=` 查询；`GET /api/scheduler/status` 会返回持久化计划、退避时间、延后原因和当前阻塞任务。
 
 快速操作区的“本机检测”旁边也提供检测范围、多个检测目标、检测数量和导出目标。这些控件会和完整设置面板同步，适合临时改目标或改单次检测规模后马上执行。
@@ -115,7 +119,7 @@ ghcr.io/ry-zzcn/proxylitechecker
 | 标签 | 说明 |
 | --- | --- |
 | `latest` | `main` 分支最新镜像 |
-| `v0.4.1` / 其它 `v*` | 对应版本镜像 |
+| `v0.4.2` / 其它 `v*` | 对应版本镜像 |
 | `0.2` | `0.2.x` 小版本线最新镜像，会随后续 `v0.2.x` 自动前移 |
 
 查看仓库 Packages 页面：
@@ -214,6 +218,11 @@ Unblock-File .\proxylite-windows-amd64.exe
 | `ADMIN_PASSWORD` | `admin123` | 管理员密码 |
 | `SECRET_KEY` | `change-this-secret` | 登录令牌签名密钥 |
 | `PLC_EXPORT_TOKEN` | 空 | 导出接口令牌，空时仅登录用户可访问 |
+| `PLC_IP_METADATA_QUEUE_SIZE` | `128` | 外部 IP 元数据后台队列上限 |
+| `PLC_IP_METADATA_INTERVAL_MS` | `2000` | 外部查询最小间隔，默认约 30 次/分钟 |
+| `PLC_IP_METADATA_TTL_HOURS` | `168` | 外部元数据缓存有效期 |
+| `PLC_IP_METADATA_RETRY_MINUTES` | `30` | 外部查询失败后的重试退避 |
+| `PLC_IP_METADATA_TIMEOUT_SECONDS` | `5` | 单次外部元数据请求超时 |
 | `PLC_GATEWAY_ENABLED` | `1` | 是否启动本机 HTTP 网关 |
 | `PLC_GATEWAY_HOST` | `0.0.0.0` | 网关绑定地址 |
 | `PLC_GATEWAY_PORT` | `18080` | 首个 HTTP 目标入口端口 |
@@ -231,7 +240,7 @@ Unblock-File .\proxylite-windows-amd64.exe
 | `PLC_GATEWAY_FAILURE_COOLDOWN_SECONDS` | `300` | 上游失败隔离冷却秒数 |
 | `PLC_GATEWAY_REQUEST_TIMEOUT_SECONDS` | `20` | 网关上游请求/拨号超时秒数 |
 
-`lowest_latency` 使用最近一次检测保存的延迟排序，不会在每个网关请求路径上重新测速。
+`lowest_latency` 综合最近检测延迟和网关运行期 EWMA 延迟；`stability_first` 综合检测成功率和运行期 EWMA 成功率。两者都不会在每个请求路径上重新执行代理检测。
 
 默认网关监听 `0.0.0.0` 是为了方便本机 Docker 容器和同网络服务访问。公网部署时建议用防火墙或安全组限制 `18080-18089` 的访问来源，避免把代理网关暴露成开放代理。
 

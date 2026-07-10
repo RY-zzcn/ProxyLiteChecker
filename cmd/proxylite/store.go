@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -21,6 +24,12 @@ import (
 type store struct {
 	db   *sql.DB
 	path string
+
+	statsMu              sync.Mutex
+	statsGeneration      uint64
+	statsCacheGeneration uint64
+	statsCacheAt         time.Time
+	statsCache           map[string]any
 }
 
 // proxyRecord keeps the flat v0.3.x API fields for compatibility. From v0.4.0
@@ -114,6 +123,7 @@ type proxyTargetSummary struct {
 
 const stateModelMigrationVersion = 400001
 const taskSchedulerMigrationVersion = 401001
+const geoCacheMigrationVersion = 402001
 
 type parsedProxy struct {
 	Host     string
@@ -414,11 +424,74 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	if err := s.applyTaskSchedulerMigrationIfNeeded(); err != nil {
 		return err
 	}
+	if err := s.applyGeoCacheMigrationIfNeeded(); err != nil {
+		return err
+	}
+	if err := s.ensurePerformanceIndexes(); err != nil {
+		return err
+	}
 	version, err := s.SchemaVersion()
 	if err != nil {
 		return err
 	}
 	log.Printf("database schema version: %d", version)
+	return nil
+}
+
+func (s *store) ensurePerformanceIndexes() error {
+	_, err := s.db.Exec(`
+CREATE INDEX IF NOT EXISTS idx_proxy_target_stats
+ON proxy_target_state(target_profile, status, grade, capability, proxy_id);
+CREATE INDEX IF NOT EXISTS idx_proxy_probe_status_proxy
+ON proxy_probe_state(status, proxy_id);`)
+	return err
+}
+
+func (s *store) applyGeoCacheMigrationIfNeeded() error {
+	var applied int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", geoCacheMigrationVersion).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`
+CREATE TABLE ip_geo_cache (
+  ip TEXT PRIMARY KEY,
+  country TEXT NOT NULL DEFAULT '',
+  country_name TEXT NOT NULL DEFAULT '',
+  continent_code TEXT NOT NULL DEFAULT '',
+  ip_type TEXT NOT NULL DEFAULT '',
+  asn_org TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  fetched_at TEXT,
+  expires_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  retry_after TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_ip_geo_cache_expires ON ip_geo_cache(expires_at);
+CREATE INDEX idx_ip_geo_cache_retry ON ip_geo_cache(retry_after);
+INSERT INTO schema_migrations (version, name, applied_at, app_version)
+VALUES (?, 'v0.4.2_ip_geo_cache', datetime('now', '+8 hours'), '0.4.2')
+`, geoCacheMigrationVersion); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	log.Printf("database migration applied: version=%d name=v0.4.2_ip_geo_cache", geoCacheMigrationVersion)
 	return nil
 }
 
@@ -771,7 +844,41 @@ func (s *store) UserPasswordHash(username string) (string, bool, error) {
 	return hash, true, nil
 }
 
+const aggregateStatsCacheTTL = 3 * time.Second
+
 func (s *store) Stats() (map[string]any, error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	now := time.Now()
+	if s.statsCache != nil && s.statsCacheGeneration == s.statsGeneration && now.Sub(s.statsCacheAt) < aggregateStatsCacheTTL {
+		cached := cloneMap(s.statsCache)
+		cached["cache_age_ms"] = now.Sub(s.statsCacheAt).Milliseconds()
+		return cached, nil
+	}
+	stats, err := s.statsUncached(now)
+	if err != nil {
+		return nil, err
+	}
+	s.statsCache = cloneMap(stats)
+	s.statsCacheAt = time.Now()
+	s.statsCacheGeneration = s.statsGeneration
+	return stats, nil
+}
+
+func (s *store) InvalidateStats() {
+	s.statsMu.Lock()
+	s.statsGeneration++
+	s.statsCache = nil
+	s.statsMu.Unlock()
+}
+
+func (s *store) StatsGeneration() uint64 {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	return s.statsGeneration
+}
+
+func (s *store) statsUncached(now time.Time) (map[string]any, error) {
 	stats := map[string]any{
 		"total":                    0,
 		"available":                0,
@@ -781,153 +888,179 @@ func (s *store) Stats() (map[string]any, error) {
 		"transport_available":      0,
 		"unique_target_available":  0,
 		"target_available_records": 0,
+		"generated_at":             formatBeijingTime(now),
+		"cache_age_ms":             int64(0),
 	}
-	rows, err := s.db.Query(`
-SELECT COALESCE(ps.status, 'untested'), COUNT(*)
+	var total, transportAvailable, failed, untested int
+	if err := s.db.QueryRow(`
+SELECT COUNT(*),
+       COALESCE(SUM(CASE WHEN COALESCE(ps.status, 'untested') = 'available' THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN COALESCE(ps.status, 'untested') = 'failed' THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN COALESCE(ps.status, 'untested') = 'untested' THEN 1 ELSE 0 END), 0)
 FROM proxies p
 LEFT JOIN proxy_probe_state ps ON ps.proxy_id = p.id
+WHERE p.enabled = 1`).Scan(&total, &transportAvailable, &failed, &untested); err != nil {
+		return nil, err
+	}
+	stats["total"] = total
+	stats["available"] = transportAvailable
+	stats["failed"] = failed
+	stats["untested"] = untested
+	stats["transport_available"] = transportAvailable
+	targetItems := make(map[string]map[string]any, len(targetProfileOrder))
+	for _, profile := range targetProfileOrder {
+		targetItems[profile] = map[string]any{
+			"target_profile":    profile,
+			"label":             targetProfileLabel(profile),
+			"total":             total,
+			"available":         0,
+			"available_records": 0,
+			"failed":            0,
+			"untested":          total,
+			"checking":          0,
+			"by_grade":          map[string]int{},
+		}
+	}
+	rows, err := s.db.Query(`
+SELECT ts.target_profile,
+       ts.status,
+       ts.grade,
+       COUNT(*) AS records,
+       COALESCE(SUM(CASE
+         WHEN ts.status = 'available'
+          AND ((ts.target_profile = 'generic' AND ts.capability IN ('base', 'web', 'api', 'web_api'))
+            OR (ts.target_profile != 'generic' AND ts.capability IN ('web', 'api', 'web_api')))
+         THEN 1 ELSE 0 END), 0) AS usable
+FROM proxy_target_state ts
+JOIN proxies p ON p.id = ts.proxy_id
 WHERE p.enabled = 1
-GROUP BY COALESCE(ps.status, 'untested')`)
+  AND ts.target_profile IN ('generic', 'openai', 'grok', 'gemini', 'claude')
+GROUP BY ts.target_profile, ts.status, ts.grade`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	total := 0
+	byGrade := map[string]int{}
+	targetAvailableRecords := 0
 	for rows.Next() {
-		var status string
-		var count int
-		if err := rows.Scan(&status, &count); err != nil {
+		var profile, status, grade string
+		var records, usable int
+		if err := rows.Scan(&profile, &status, &grade, &records, &usable); err != nil {
 			return nil, err
 		}
-		stats[status] = count
-		total += count
+		item := targetItems[profile]
+		if item == nil {
+			continue
+		}
+		switch status {
+		case "available":
+			item["available_records"] = anyToInt(item["available_records"]) + records
+			item["available"] = anyToInt(item["available"]) + usable
+			item["untested"] = maxInt(0, anyToInt(item["untested"])-records)
+			targetAvailableRecords += records
+			if grade != "" {
+				grades := item["by_grade"].(map[string]int)
+				grades[grade] += records
+				byGrade[grade] += records
+			}
+		case "failed":
+			item["failed"] = anyToInt(item["failed"]) + records
+			item["untested"] = maxInt(0, anyToInt(item["untested"])-records)
+		}
 	}
-	stats["total"] = total
-	transportAvailable := anyToInt(stats["available"])
-	stats["transport_available"] = transportAvailable
-	gradeRows, err := s.db.Query(`
-SELECT ts.grade, COUNT(*)
-FROM proxy_target_state ts
-JOIN proxies p ON p.id = ts.proxy_id
-WHERE p.enabled = 1 AND ts.status = 'available' AND ts.grade != ''
-GROUP BY ts.grade`)
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	uniqueAvailable := 0
+	uniqueRows, err := s.db.Query(`
+WITH usable AS (
+  SELECT ts.target_profile,
+         CASE
+           WHEN COALESCE(NULLIF(LOWER(TRIM(ps.detected_protocol)), ''), NULLIF(LOWER(TRIM(p.protocol)), ''), 'http') = 'auto'
+             THEN 'http'
+           ELSE COALESCE(NULLIF(LOWER(TRIM(ps.detected_protocol)), ''), NULLIF(LOWER(TRIM(p.protocol)), ''), 'http')
+         END AS protocol,
+         COALESCE(p.username, '') AS username,
+         COALESCE(p.password, '') AS password,
+         LOWER(TRIM(p.ip)) AS ip,
+         p.port
+  FROM proxy_target_state ts
+  JOIN proxies p ON p.id = ts.proxy_id
+  LEFT JOIN proxy_probe_state ps ON ps.proxy_id = p.id
+  WHERE p.enabled = 1
+    AND ts.status = 'available'
+    AND ((ts.target_profile = 'generic' AND ts.capability IN ('base', 'web', 'api', 'web_api'))
+      OR (ts.target_profile != 'generic' AND ts.capability IN ('web', 'api', 'web_api')))
+    AND ts.target_profile IN ('generic', 'openai', 'grok', 'gemini', 'claude')
+),
+dedup AS (
+  SELECT target_profile, protocol, username, password, ip, port
+  FROM usable
+  GROUP BY target_profile, protocol, username, password, ip, port
+),
+per_target AS (
+  SELECT target_profile, COUNT(*) AS count
+  FROM dedup
+  GROUP BY target_profile
+),
+global_dedup AS (
+  SELECT protocol, username, password, ip, port
+  FROM dedup
+  GROUP BY protocol, username, password, ip, port
+)
+SELECT target_profile, count FROM per_target
+UNION ALL
+SELECT '__all__', COUNT(*) FROM global_dedup`)
 	if err != nil {
 		return nil, err
 	}
-	defer gradeRows.Close()
-	byGrade := map[string]int{}
-	for gradeRows.Next() {
-		var grade string
+	for uniqueRows.Next() {
+		var profile string
 		var count int
-		if err := gradeRows.Scan(&grade, &count); err != nil {
+		if err := uniqueRows.Scan(&profile, &count); err != nil {
+			_ = uniqueRows.Close()
 			return nil, err
 		}
-		byGrade[grade] = count
+		if profile == "__all__" {
+			uniqueAvailable = count
+			continue
+		}
+		if item := targetItems[profile]; item != nil {
+			item["available"] = count
+		}
+	}
+	if err := uniqueRows.Close(); err != nil {
+		return nil, err
+	}
+	if err := uniqueRows.Err(); err != nil {
+		return nil, err
 	}
 	stats["by_grade"] = byGrade
-	byTarget, err := s.TargetStats()
-	if err != nil {
-		return nil, err
+	byTarget := make([]map[string]any, 0, len(targetProfileOrder))
+	for _, profile := range targetProfileOrder {
+		item := targetItems[profile]
+		byTarget = append(byTarget, item)
 	}
 	stats["by_target"] = byTarget
-	availableURLs, err := s.CountAvailableProxyURLsForProfiles(targetProfileOrder)
-	if err != nil {
-		return nil, err
-	}
-	var targetAvailableRecords int
-	if err := s.db.QueryRow(`
-SELECT COUNT(*) FROM proxy_target_state ts
-JOIN proxies p ON p.id = ts.proxy_id
-WHERE p.enabled = 1 AND ts.status = 'available'`).Scan(&targetAvailableRecords); err != nil {
-		return nil, err
-	}
 	stats["target_available_records"] = targetAvailableRecords
 	stats["available_records"] = targetAvailableRecords
-	stats["unique_target_available"] = availableURLs
-	stats["available"] = availableURLs
+	stats["unique_target_available"] = uniqueAvailable
+	stats["available"] = uniqueAvailable
 	return stats, nil
 }
 
 func (s *store) TargetStats() ([]map[string]any, error) {
-	out := make([]map[string]any, 0, len(targetProfileOrder))
-	for _, profile := range targetProfileOrder {
-		item := map[string]any{
-			"target_profile": profile,
-			"label":          targetProfileLabel(profile),
-			"total":          0,
-			"available":      0,
-			"failed":         0,
-			"untested":       0,
-			"checking":       0,
-			"by_grade":       map[string]int{},
-		}
-		rows, err := s.db.Query(`
-SELECT COALESCE(c.status, 'untested') AS status, COUNT(*)
-FROM proxies p
-LEFT JOIN proxy_target_state c ON c.proxy_id = p.id AND c.target_profile = ?
-WHERE p.enabled = 1
-GROUP BY COALESCE(c.status, 'untested')`, profile)
-		if err != nil {
-			return nil, err
-		}
-		total := 0
-		for rows.Next() {
-			var status string
-			var count int
-			if err := rows.Scan(&status, &count); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			item[status] = count
-			total += count
-		}
-		availableRecords := anyToInt(item["available"])
-		item["available_records"] = availableRecords
-		if err := rows.Close(); err != nil {
-			return nil, err
-		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		item["total"] = total
-
-		gradeRows, err := s.db.Query(`
-SELECT COALESCE(c.grade, '') AS grade, COUNT(*)
-FROM proxies p
-LEFT JOIN proxy_target_state c ON c.proxy_id = p.id AND c.target_profile = ?
-WHERE p.enabled = 1
-  AND COALESCE(c.status, 'untested') = 'available'
-  AND COALESCE(c.grade, '') != ''
-GROUP BY COALESCE(c.grade, '')`, profile)
-		if err != nil {
-			return nil, err
-		}
-		byGrade := map[string]int{}
-		for gradeRows.Next() {
-			var grade string
-			var count int
-			if err := gradeRows.Scan(&grade, &count); err != nil {
-				_ = gradeRows.Close()
-				return nil, err
-			}
-			byGrade[grade] = count
-		}
-		if err := gradeRows.Close(); err != nil {
-			return nil, err
-		}
-		if err := gradeRows.Err(); err != nil {
-			return nil, err
-		}
-		item["by_grade"] = byGrade
-		availableURLs, err := s.CountAvailableProxyURLs(profile)
-		if err != nil {
-			return nil, err
-		}
-		if availableURLs == 0 && availableRecords > 0 {
-			availableURLs = availableRecords
-		}
-		item["available"] = availableURLs
-		out = append(out, item)
+	stats, err := s.Stats()
+	if err != nil {
+		return nil, err
+	}
+	items, _ := stats["by_target"].([]map[string]any)
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, cloneMap(item))
 	}
 	return out, nil
 }
@@ -964,6 +1097,7 @@ func (s *store) ImportProxies(text string, source string, defaultProtocol string
 		return nil, err
 	}
 	committed = true
+	s.InvalidateStats()
 	return map[string]any{"total": len(items), "added": added, "updated": updated, "skipped": 0}, nil
 }
 
@@ -1364,6 +1498,7 @@ func (s *store) DeleteProxiesByStatus(status string) (map[string]any, error) {
 		return nil, err
 	}
 	deleted, _ := result.RowsAffected()
+	s.InvalidateStats()
 	return map[string]any{"status": status, "deleted": deleted}, nil
 }
 
@@ -1416,6 +1551,86 @@ LIMIT ?`
 }
 
 func (s *store) SaveCheckResult(result CheckResult) error {
+	return s.SaveProxyCheckBundleContext(context.Background(), result.ProxyID, []CheckResult{result})
+}
+
+func (s *store) SaveProxyCheckBundle(proxyID int, results []CheckResult) error {
+	return s.SaveProxyCheckBundleContext(context.Background(), proxyID, results)
+}
+
+func (s *store) SaveProxyCheckBundleContext(ctx context.Context, proxyID int, results []CheckResult) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		err = s.saveProxyCheckBundleOnce(ctx, proxyID, results)
+		if err == nil || !isSQLiteBusyError(err) {
+			return err
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
+}
+
+func (s *store) saveProxyCheckBundleOnce(ctx context.Context, proxyID int, results []CheckResult) error {
+	if proxyID <= 0 || len(results) == 0 {
+		return errors.New("proxy check bundle is empty")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	var proxyExists int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM proxies WHERE id = ?", proxyID).Scan(&proxyExists); err != nil {
+		return err
+	}
+	if proxyExists == 0 {
+		return sql.ErrNoRows
+	}
+	seenProfiles := map[string]bool{}
+	for index, result := range results {
+		if result.ProxyID != proxyID {
+			return errors.New("proxy check bundle contains mixed proxy IDs")
+		}
+		profile := normalizeTargetProfile(result.TargetProfile)
+		if seenProfiles[profile] {
+			return fmt.Errorf("proxy check bundle contains duplicate target profile %s", profile)
+		}
+		seenProfiles[profile] = true
+		if err := saveCheckResultTx(ctx, tx, result, index == 0); err != nil {
+			return err
+		}
+	}
+	if err := syncProxyAggregateStatusTxContext(ctx, tx, proxyID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	s.InvalidateStats()
+	return nil
+}
+
+func isSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") || strings.Contains(message, "database is busy") || strings.Contains(message, "sqlite_busy") || strings.Contains(message, "sqlite_locked")
+}
+
+func saveCheckResultTx(ctx context.Context, tx *sql.Tx, result CheckResult, writeProbe bool) error {
 	targetProfile := normalizeTargetProfile(result.TargetProfile)
 	capability := targetCapability(result)
 	if targetProfile == "generic" && strings.EqualFold(strings.TrimSpace(result.Status), "available") && capability == "none" {
@@ -1437,27 +1652,10 @@ func (s *store) SaveCheckResult(result CheckResult) error {
 	if result.APIReachable != nil {
 		apiReachable = boolToInt(*result.APIReachable)
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-	var proxyExists int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM proxies WHERE id = ?", result.ProxyID).Scan(&proxyExists); err != nil {
-		return err
-	}
-	if proxyExists == 0 {
-		return sql.ErrNoRows
-	}
 	preserveRootSnapshot := false
 	if targetStatus == "failed" {
 		var otherAvailable int
-		if err := tx.QueryRow(`
+		if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM proxy_target_state
 WHERE proxy_id = ?
@@ -1467,11 +1665,12 @@ WHERE proxy_id = ?
 		}
 		preserveRootSnapshot = otherAvailable > 0
 	}
-	probeFailureIncrement := 0
-	if probeStatus == "failed" {
-		probeFailureIncrement = 1
-	}
-	if _, err := tx.Exec(`
+	if writeProbe {
+		probeFailureIncrement := 0
+		if probeStatus == "failed" {
+			probeFailureIncrement = 1
+		}
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO proxy_probe_state (
   proxy_id, status, status_changed_at, detected_protocol, base_reachable, exit_ip,
   latency_ms, success_rate, country, country_name, continent_code, ip_type, asn_org,
@@ -1506,31 +1705,32 @@ ON CONFLICT(proxy_id) DO UPDATE SET
   END,
   checked_at = excluded.checked_at,
   updated_at = excluded.updated_at`,
-		result.ProxyID,
-		probeStatus,
-		nullableString(result.DetectedProtocol),
-		boolToInt(probeStatus == "available"),
-		nullableString(result.ExitIP),
-		nullableInt(result.LatencyMS),
-		result.SuccessRate,
-		nullableString(result.Country),
-		nullableString(result.CountryName),
-		nullableString(result.ContinentCode),
-		nullableString(result.IPType),
-		nullableString(result.ASNOrg),
-		nullableString(result.GeoSource),
-		nullableString(result.GeoUpdatedAt),
-		failureReason,
-		nullableString(result.LastError),
-		probeFailureIncrement,
-	); err != nil {
-		return err
+			result.ProxyID,
+			probeStatus,
+			nullableString(result.DetectedProtocol),
+			boolToInt(probeStatus == "available"),
+			nullableString(result.ExitIP),
+			nullableInt(result.LatencyMS),
+			result.SuccessRate,
+			nullableString(result.Country),
+			nullableString(result.CountryName),
+			nullableString(result.ContinentCode),
+			nullableString(result.IPType),
+			nullableString(result.ASNOrg),
+			nullableString(result.GeoSource),
+			nullableString(result.GeoUpdatedAt),
+			failureReason,
+			nullableString(result.LastError),
+			probeFailureIncrement,
+		); err != nil {
+			return err
+		}
 	}
 	targetFailureIncrement := 0
 	if targetStatus == "failed" {
 		targetFailureIncrement = 1
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO proxy_target_state (
   proxy_id, target_profile, status, status_changed_at, capability, service_reachable,
   api_reachable, latency_ms, success_rate, grade, cloudflare_status, recommended_use,
@@ -1568,7 +1768,7 @@ ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
 		return err
 	}
 	if !preserveRootSnapshot {
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 UPDATE proxies
 SET grade = ?,
     latency_ms = ?,
@@ -1615,7 +1815,7 @@ WHERE id = ?`,
 			return err
 		}
 	}
-	_, err = tx.Exec(`
+	_, err := tx.ExecContext(ctx, `
 INSERT INTO proxy_checks (
   proxy_id, target_profile, status, status_changed_at, grade, latency_ms, exit_ip, country, country_name, continent_code, ip_type, asn_org, geo_source, geo_updated_at,
   success_rate, detected_protocol, service_reachable, api_reachable, cloudflare_status,
@@ -1671,13 +1871,6 @@ ON CONFLICT(proxy_id, target_profile) DO UPDATE SET
 	if err != nil {
 		return err
 	}
-	if err := syncProxyAggregateStatusTx(tx, result.ProxyID); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	committed = true
 	return nil
 }
 
@@ -1729,7 +1922,11 @@ func normalizeProbeStateStatus(result CheckResult) string {
 }
 
 func syncProxyAggregateStatusTx(tx *sql.Tx, proxyID int) error {
-	_, err := tx.Exec(`
+	return syncProxyAggregateStatusTxContext(context.Background(), tx, proxyID)
+}
+
+func syncProxyAggregateStatusTxContext(ctx context.Context, tx *sql.Tx, proxyID int) error {
+	_, err := tx.ExecContext(ctx, `
 UPDATE proxies
 SET status_changed_at = CASE
       WHEN status != `+proxyAggregateStatusExpression+` THEN datetime('now', '+8 hours')
@@ -1772,6 +1969,9 @@ WHERE id = ?
 		return false, err
 	}
 	rows, err := result.RowsAffected()
+	if err == nil && rows > 0 {
+		s.InvalidateStats()
+	}
 	return rows > 0, err
 }
 
@@ -1793,7 +1993,11 @@ WHERE enabled = 1
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err == nil && rows > 0 {
+		s.InvalidateStats()
+	}
+	return rows, err
 }
 
 func (s *store) DeleteExpiredUntested(ttlHours int) (int64, error) {
@@ -1816,7 +2020,11 @@ WHERE enabled = 1
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err == nil && rows > 0 {
+		s.InvalidateStats()
+	}
+	return rows, err
 }
 
 func (s *store) RequeueExpiredAvailable(ttlHours int) (int64, error) {
@@ -1886,6 +2094,7 @@ WHERE status = 'available'
 		return 0, err
 	}
 	committed = true
+	s.InvalidateStats()
 	return affected, nil
 }
 

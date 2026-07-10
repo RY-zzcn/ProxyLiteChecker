@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-07-10
+
+- Execute multi-target checks proxy-first so protocol selection, exit-IP discovery, and local GeoIP run once per proxy and round instead of once per target.
+- Save one proxy probe and all selected target results atomically with bounded SQLite busy retries, cancellation-aware persistence, and separate network/persistence terminal counters.
+- Add schema 402001 and persistent `ip_geo_cache`; move external ASN/IP-type enrichment to a bounded, rate-limited background queue with cache TTL, singleflight merging, and failure backoff.
+- Allow GeoIP initialization retry after failure, serialize manual/automatic updates, keep readers alive during lookups, and retain verified temporary-file atomic replacement.
+- Replace repeated target statistics queries with aggregate SQL, covering indexes, short generation caches, and `generated_at/cache_age_ms` diagnostics.
+- Refresh gateway candidate pools outside selector locks, atomically replace generation-tagged snapshots, preserve old pools on failure, and report pool age and refresh errors.
+- Add gateway runtime EWMA latency/success scoring, single-probe half-open circuits, and explicit degraded selection without clearing failure history.
+- Deduplicate frontend GET requests, pause high-frequency polling in hidden tabs, isolate job-ID polling, and display stats freshness plus gateway circuit/pool diagnostics.
+- Add proxy-first request-count, bundle atomicity, GeoIP queue/cache, slow-refresh, EWMA/half-open/degraded, cache invalidation, real v0.3.4 migration, 20k, and 100k performance coverage.
+
 ## 0.4.1 - 2026-07-10
 
 - Persist job history, parameters, progress, terminal results, errors, parent relationships, and process instance IDs in SQLite with restart-safe autoincrement IDs.

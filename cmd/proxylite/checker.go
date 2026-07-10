@@ -77,8 +77,33 @@ type singleCheckResult struct {
 }
 
 type checkPlan struct {
-	TargetProfile string
-	Items         []ProxyTask
+	Item           ProxyTask
+	TargetProfiles []string
+}
+
+type checkBundle struct {
+	ProxyID int
+	Results []CheckResult
+}
+
+type targetProbeResult struct {
+	ServiceReachable bool
+	APIReachable     *bool
+	LatencyMS        *int
+	CloudflareStatus *string
+	Successes        int
+	Total            int
+}
+
+type checkGeoCache struct {
+	mu     sync.Mutex
+	values map[string]*checkGeoCacheEntry
+	lookup func(context.Context, string) checkmeta.Metadata
+}
+
+type checkGeoCacheEntry struct {
+	metadata checkmeta.Metadata
+	ready    chan struct{}
 }
 
 type proxyCheckOutcome struct {
@@ -98,6 +123,10 @@ var targetProfiles = map[string]TargetProfile{
 	"gemini":  {ServiceURL: "https://gemini.google.com/", APIURL: "https://generativelanguage.googleapis.com/v1beta/models"},
 	"claude":  {ServiceURL: "https://claude.ai/", APIURL: "https://api.anthropic.com/v1/models"},
 }
+
+var checkProxyHTTPClient = proxyHTTPClient
+var checkExitIPTargets = exitIPTargets
+var checkEnrichIP = checkmeta.EnrichIP
 
 func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	scheduled := strings.EqualFold(optionalString(payload["scheduled_trigger"], ""), "auto")
@@ -167,23 +196,23 @@ func (s *server) StartCheckJob(payload map[string]any) (map[string]any, error) {
 	if s.scheduler != nil {
 		s.scheduler.MarkStarted(job)
 	}
-	plans := make([]checkPlan, 0, len(targetProfiles))
-	total := 0
+	candidates := make(map[string][]ProxyTask, len(targetProfiles))
 	for _, profile := range targetProfiles {
 		items, err := s.store.ListCheckCandidates(status, cfg.Limit, profile)
 		if err != nil {
 			s.jobs.fail(job.ID, err)
 			return nil, err
 		}
-		plans = append(plans, checkPlan{TargetProfile: profile, Items: items})
-		total += len(items)
+		candidates[profile] = items
 	}
+	plans := buildProxyFirstCheckPlans(targetProfiles, candidates)
+	total := totalCheckPlanItems(plans)
 	s.jobs.Update(job.ID, map[string]any{
 		"total":   total,
-		"message": fmt.Sprintf("本机检测排队：%d 条 / %d 个目标", total, len(targetProfiles)),
+		"message": fmt.Sprintf("本机检测排队：%d 个代理 / %d 项目标检测", len(plans), total),
 	})
 	go s.runCheckJob(ctx, job.ID, plans, cfg)
-	return map[string]any{"job_id": job.ID, "count": total, "target_profiles": targetProfiles}, nil
+	return map[string]any{"job_id": job.ID, "count": total, "proxy_count": len(plans), "target_profiles": targetProfiles}, nil
 }
 
 func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPlan, cfg CheckConfig) {
@@ -200,77 +229,90 @@ func (s *server) runCheckJob(ctx context.Context, jobID string, plans []checkPla
 	done := 0
 	available := 0
 	failed := 0
+	checkFailed := 0
 	persisted := 0
 	persistenceFailed := 0
 	deletedFailed := 0
 	outcomes := buildProxyCheckOutcomes(plans)
-	for _, plan := range plans {
-		if ctx.Err() != nil {
-			break
-		}
-		items := plan.Items
-		if len(items) == 0 {
+	geoCache := newCheckGeoCache()
+	if s.geoEnricher != nil {
+		geoCache = newCheckGeoCacheWithLookup(s.geoEnricher.LookupAndQueue)
+	}
+	for bundle := range checkBatchStream(ctx, plans, cfg, geoCache) {
+		if len(bundle.Results) == 0 {
 			continue
 		}
-		planCfg := cfg
-		planCfg.TargetProfile = plan.TargetProfile
-		for result := range checkBatchStream(ctx, items, planCfg) {
-			outcome := outcomes[result.ProxyID]
-			if outcome == nil {
-				outcome = &proxyCheckOutcome{Expected: 1, AllFailed: true, Persisted: true}
-				outcomes[result.ProxyID] = outcome
-			}
+		outcome := outcomes[bundle.ProxyID]
+		if outcome == nil {
+			outcome = &proxyCheckOutcome{Expected: len(bundle.Results), AllFailed: true, Persisted: true}
+			outcomes[bundle.ProxyID] = outcome
+		}
+		for _, result := range bundle.Results {
 			outcome.Seen++
 			outcome.BaseReachable = outcome.BaseReachable || result.BaseReachable
 			if result.Status == "available" {
 				outcome.AllFailed = false
 			}
-			if err := s.store.SaveCheckResult(result); err != nil {
-				failed++
-				persistenceFailed++
-				outcome.Persisted = false
-			} else if result.Status == "available" {
-				available++
+		}
+		previousDone := done
+		done += len(bundle.Results)
+		persistenceCtx := ctx
+		cancelPersistence := func() {}
+		if ctx.Err() != nil {
+			persistenceCtx, cancelPersistence = context.WithTimeout(context.Background(), 5*time.Second)
+		}
+		err := s.store.SaveProxyCheckBundleContext(persistenceCtx, bundle.ProxyID, bundle.Results)
+		cancelPersistence()
+		if err != nil {
+			failed += len(bundle.Results)
+			persistenceFailed += len(bundle.Results)
+			outcome.Persisted = false
+		} else {
+			for _, result := range bundle.Results {
 				persisted++
-			} else {
-				failed++
-				persisted++
-			}
-			if planCfg.DeleteFailed && shouldDeleteFailedProxy(outcome) {
-				deleted, err := s.store.DeleteProxyIfNoAvailableTargets(result.ProxyID)
-				if err != nil {
-					persistenceFailed++
-					outcome.Persisted = false
-				} else if deleted {
-					deletedFailed++
+				if result.Status == "available" {
+					available++
+				} else {
+					failed++
+					checkFailed++
 				}
 			}
-			done++
-			if done == 1 || done%10 == 0 || done == total {
-				s.jobs.Update(jobID, map[string]any{
-					"done":    done,
-					"total":   total,
-					"success": available,
-					"failed":  failed,
-					"message": checkProgressMessage(done, total, plan.TargetProfile, available, failed, deletedFailed, cfg.DeleteFailed),
-				})
+		}
+		if cfg.DeleteFailed && shouldDeleteFailedProxy(outcome) {
+			deleted, err := s.store.DeleteProxyIfNoAvailableTargets(bundle.ProxyID)
+			if err != nil {
+				persistenceFailed++
+				outcome.Persisted = false
+			} else if deleted {
+				deletedFailed++
 			}
 		}
-	}
-	if ctx.Err() != nil {
-		s.jobs.finishCancelled(jobID, "本机检测已停止")
-		return
+		if done == len(bundle.Results) || done/10 != previousDone/10 || done == total {
+			lastProfile := bundle.Results[len(bundle.Results)-1].TargetProfile
+			s.jobs.Update(jobID, map[string]any{
+				"done":    done,
+				"total":   total,
+				"success": available,
+				"failed":  failed,
+				"message": checkProgressMessage(done, total, lastProfile, available, failed, deletedFailed, cfg.DeleteFailed),
+			})
+		}
 	}
 	result := map[string]any{
 		"checked":            done,
 		"available":          available,
 		"failed":             failed,
+		"network_failed":     checkFailed,
 		"persisted":          persisted,
 		"persistence_failed": persistenceFailed,
 		"deleted_failed":     deletedFailed,
 		"target_profiles":    checkPlanProfiles(plans),
 	}
-	s.jobs.Update(jobID, map[string]any{"done": done, "total": total, "success": available, "failed": failed})
+	s.jobs.Update(jobID, map[string]any{"done": done, "total": total, "success": available, "failed": failed, "result": result})
+	if ctx.Err() != nil {
+		s.jobs.finishCancelled(jobID, "本机检测已停止")
+		return
+	}
 	s.finalizeCheckJob(jobID, available, failed, persisted, persistenceFailed, deletedFailed, cfg.DeleteFailed, result)
 }
 
@@ -290,14 +332,12 @@ func (s *server) finalizeCheckJob(jobID string, available int, failed int, persi
 func buildProxyCheckOutcomes(plans []checkPlan) map[int]*proxyCheckOutcome {
 	out := map[int]*proxyCheckOutcome{}
 	for _, plan := range plans {
-		for _, item := range plan.Items {
-			state := out[item.ID]
-			if state == nil {
-				state = &proxyCheckOutcome{AllFailed: true, Persisted: true}
-				out[item.ID] = state
-			}
-			state.Expected++
+		state := out[plan.Item.ID]
+		if state == nil {
+			state = &proxyCheckOutcome{AllFailed: true, Persisted: true}
+			out[plan.Item.ID] = state
 		}
+		state.Expected += len(plan.TargetProfiles)
 	}
 	return out
 }
@@ -396,36 +436,53 @@ func targetProfileLabel(value string) string {
 func totalCheckPlanItems(plans []checkPlan) int {
 	total := 0
 	for _, plan := range plans {
-		total += len(plan.Items)
+		total += len(plan.TargetProfiles)
 	}
 	return total
 }
 
 func checkPlanProfiles(plans []checkPlan) []string {
-	out := make([]string, 0, len(plans))
+	out := []string{}
+	seen := map[string]bool{}
 	for _, plan := range plans {
-		out = append(out, plan.TargetProfile)
-	}
-	return out
-}
-
-func filterDeletedCheckItems(items []ProxyTask, deletedIDs map[int]bool) []ProxyTask {
-	if len(deletedIDs) == 0 {
-		return items
-	}
-	out := make([]ProxyTask, 0, len(items))
-	for _, item := range items {
-		if !deletedIDs[item.ID] {
-			out = append(out, item)
+		for _, profile := range plan.TargetProfiles {
+			if !seen[profile] {
+				seen[profile] = true
+				out = append(out, profile)
+			}
 		}
 	}
 	return out
 }
 
-func checkBatchStream(ctx context.Context, items []ProxyTask, cfg CheckConfig) <-chan CheckResult {
-	results := make(chan CheckResult, maxInt(1, minInt(cfg.Concurrent, len(items))))
-	jobs := make(chan ProxyTask)
-	workers := minInt(cfg.Concurrent, len(items))
+func buildProxyFirstCheckPlans(profiles []string, candidates map[string][]ProxyTask) []checkPlan {
+	profiles = normalizeTargetProfiles(profiles)
+	plans := []checkPlan{}
+	byProxyID := map[int]int{}
+	for _, profile := range profiles {
+		for _, item := range candidates[profile] {
+			index, ok := byProxyID[item.ID]
+			if !ok {
+				byProxyID[item.ID] = len(plans)
+				plans = append(plans, checkPlan{Item: item, TargetProfiles: []string{profile}})
+				continue
+			}
+			if !stringSliceContains(plans[index].TargetProfiles, profile) {
+				plans[index].TargetProfiles = append(plans[index].TargetProfiles, profile)
+			}
+		}
+	}
+	return plans
+}
+
+func checkBatchStream(ctx context.Context, plans []checkPlan, cfg CheckConfig, geoCache *checkGeoCache) <-chan checkBundle {
+	workers := minInt(maxInt(1, cfg.Concurrent), len(plans))
+	results := make(chan checkBundle, maxInt(1, workers))
+	jobs := make(chan checkPlan)
+	if workers == 0 {
+		close(results)
+		return results
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -435,25 +492,20 @@ func checkBatchStream(ctx context.Context, items []ProxyTask, cfg CheckConfig) <
 				select {
 				case <-ctx.Done():
 					return
-				case item, ok := <-jobs:
+				case plan, ok := <-jobs:
 					if !ok {
 						return
 					}
-					result := checkProxy(ctx, item, cfg)
-					select {
-					case results <- result:
-					case <-ctx.Done():
-						return
-					}
+					results <- checkProxyPlan(ctx, plan, cfg, geoCache)
 				}
 			}
 		}()
 	}
 	go func() {
 		defer close(jobs)
-		for _, item := range items {
+		for _, plan := range plans {
 			select {
-			case jobs <- item:
+			case jobs <- plan:
 			case <-ctx.Done():
 				return
 			}
@@ -466,137 +518,279 @@ func checkBatchStream(ctx context.Context, items []ProxyTask, cfg CheckConfig) <
 	return results
 }
 
-func checkProxy(ctx context.Context, task ProxyTask, cfg CheckConfig) CheckResult {
+func checkProxyPlan(ctx context.Context, plan checkPlan, cfg CheckConfig, geoCache *checkGeoCache) checkBundle {
+	profiles := normalizeTargetProfiles(plan.TargetProfiles)
+	bundle := checkBundle{ProxyID: plan.Item.ID, Results: make([]CheckResult, 0, len(profiles))}
 	proxyCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.HardTimeout)*time.Second)
 	defer cancel()
-	if cfg.Rounds <= 1 {
-		return checkProxyOnce(proxyCtx, task, cfg).CheckResult
-	}
-	results := make([]singleCheckResult, 0, cfg.Rounds)
-	for i := 0; i < cfg.Rounds; i++ {
+	rounds := maxInt(1, cfg.Rounds)
+	byProfile := make(map[string][]singleCheckResult, len(profiles))
+	for round := 0; round < rounds; round++ {
 		if proxyCtx.Err() != nil {
 			break
 		}
-		results = append(results, checkProxyOnce(proxyCtx, task, cfg))
+		results := checkProxyPlanOnce(proxyCtx, plan.Item, profiles, cfg, geoCache)
+		if len(results) == 0 {
+			break
+		}
+		for _, result := range results {
+			byProfile[result.TargetProfile] = append(byProfile[result.TargetProfile], result)
+		}
 	}
-	return combineRoundResults(cfg.TargetProfile, results)
+	for _, profile := range profiles {
+		results := byProfile[profile]
+		if len(results) == 0 {
+			if proxyCtx.Err() != nil {
+				continue
+			}
+			failed := failedResult(plan.Item.ID, profile, firstNonEmpty(errorString(proxyCtx.Err()), "all protocol detection failed"))
+			bundle.Results = append(bundle.Results, failed)
+			continue
+		}
+		bundle.Results = append(bundle.Results, combineRoundResults(profile, results))
+	}
+	return bundle
 }
 
-func checkProxyOnce(ctx context.Context, task ProxyTask, cfg CheckConfig) singleCheckResult {
-	profile := targetProfiles[cfg.TargetProfile]
-	if profile.ServiceURL == "" {
-		profile = targetProfiles["generic"]
-	}
-	var lastResult singleCheckResult
+func checkProxyPlanOnce(ctx context.Context, task ProxyTask, profiles []string, cfg CheckConfig, geoCache *checkGeoCache) []singleCheckResult {
+	lastError := "all protocol detection failed"
 	for _, candidate := range candidateProxyURLs(task) {
-		client, detected, err := proxyHTTPClient(candidate, cfg.RequestTimeout)
+		client, detected, err := checkProxyHTTPClient(candidate, cfg.RequestTimeout)
 		if err != nil {
-			lastResult = singleCheckResult{CheckResult: failedResult(task.ID, cfg.TargetProfile, err.Error())}
+			lastError = err.Error()
 			continue
 		}
-		if !probeClient(ctx, client, profile) {
-			lastResult = singleCheckResult{CheckResult: failedResult(task.ID, cfg.TargetProfile, detected+" probe failed")}
+		exitIP, baseLatency := probeBaseWithClient(ctx, client)
+		targetResults := probeTargetsWithClient(ctx, client, profiles)
+		if ctx.Err() != nil {
+			closeHTTPClientIdleConnections(client)
+			return nil
+		}
+		baseReachable := exitIP != nil
+		if !baseReachable && !anyTargetProbeReachable(targetResults) {
+			lastError = detected + " probe failed"
+			closeHTTPClientIdleConnections(client)
 			continue
 		}
-		result := checkWithClient(ctx, task.ID, cfg.TargetProfile, profile, client, detected)
-		if result.Status == "available" {
-			return result
+		metadata := checkmeta.Metadata{}
+		if exitIP != nil {
+			metadata = geoCache.Lookup(ctx, *exitIP)
 		}
-		lastResult = result
+		results := make([]singleCheckResult, 0, len(profiles))
+		for _, profile := range profiles {
+			results = append(results, buildTargetCheckResult(task.ID, profile, detected, exitIP, baseLatency, metadata, targetResults[profile]))
+		}
+		closeHTTPClientIdleConnections(client)
+		return results
 	}
-	if lastResult.ProxyID != 0 {
-		return lastResult
+	results := make([]singleCheckResult, 0, len(profiles))
+	for _, profile := range profiles {
+		results = append(results, singleCheckResult{CheckResult: failedResult(task.ID, profile, lastError)})
 	}
-	return singleCheckResult{CheckResult: failedResult(task.ID, cfg.TargetProfile, "all protocol detection failed")}
+	return results
 }
 
-func checkWithClient(ctx context.Context, proxyID int, targetProfile string, profile TargetProfile, client *http.Client, detected string) singleCheckResult {
+func probeBaseWithClient(ctx context.Context, client *http.Client) (*string, *int) {
+	started := time.Now()
+	for _, target := range checkExitIPTargets() {
+		if value, ok := fetchExitIP(ctx, client, target); ok {
+			latency := int(time.Since(started).Milliseconds())
+			return &value, &latency
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, nil
+}
+
+func probeTargetsWithClient(ctx context.Context, client *http.Client, profiles []string) map[string]targetProbeResult {
+	profiles = normalizeTargetProfiles(profiles)
+	results := make([]targetProbeResult, len(profiles))
+	jobs := make(chan int)
+	workers := minInt(3, len(profiles))
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				results[index] = probeTargetWithClient(ctx, client, targetProfiles[profiles[index]])
+			}
+		}()
+	}
+	for index := range profiles {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return targetProbeMap(profiles, results)
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	return targetProbeMap(profiles, results)
+}
+
+func probeTargetWithClient(ctx context.Context, client *http.Client, profile TargetProfile) targetProbeResult {
 	started := time.Now()
 	probeCtx, cancel := targetContext(ctx, profile)
 	defer cancel()
-	successes := 0
-	total := 1 + len(exitIPTargets())
-	serviceReachable := false
-	var apiReachable *bool
-	var exitIP *string
-	var latency *int
-	var cloudflareStatus *string
+	result := targetProbeResult{Total: 1}
 	if ok, cloudflare := serviceOKStatus(probeCtx, client, profile, profile.ServiceURL, serviceAllowedStatus(profile)); ok {
-		successes++
-		serviceReachable = true
-		elapsed := int(time.Since(started).Milliseconds())
-		latency = &elapsed
-		cloudflareStatus = stringPtr(cloudflare)
+		result.ServiceReachable = true
+		result.Successes++
+		latency := int(time.Since(started).Milliseconds())
+		result.LatencyMS = &latency
+		result.CloudflareStatus = stringPtr(cloudflare)
 	} else if cloudflare != "" {
-		cloudflareStatus = &cloudflare
+		result.CloudflareStatus = &cloudflare
 	}
 	if profile.APIURL != "" {
-		total++
+		result.Total++
 		ok := okStatus(probeCtx, client, profile, profile.APIURL, apiAllowedStatus(profile))
-		apiReachable = &ok
+		result.APIReachable = &ok
 		if ok {
-			successes++
-		}
-	}
-	for _, target := range exitIPTargets() {
-		if value, ok := fetchExitIP(ctx, client, target); ok {
-			successes++
-			exitIP = &value
-			if latency == nil {
-				elapsed := int(time.Since(started).Milliseconds())
-				latency = &elapsed
+			result.Successes++
+			if result.LatencyMS == nil {
+				latency := int(time.Since(started).Milliseconds())
+				result.LatencyMS = &latency
 			}
 		}
 	}
-	var country, countryName, continentCode, ipType, asnOrg, geoSource, geoUpdatedAt *string
-	if exitIP != nil {
-		metadata := checkmeta.EnrichIP(ctx, nil, "", *exitIP)
-		country = stringPtr(metadata.Country)
-		countryName = stringPtr(metadata.CountryName)
-		continentCode = stringPtr(metadata.ContinentCode)
-		ipType = stringPtr(metadata.IPType)
-		asnOrg = stringPtr(metadata.ASNOrg)
-		geoSource = stringPtr(metadata.GeoSource)
-		if !metadata.GeoUpdatedAt.IsZero() {
-			geoUpdatedAt = stringPtr(formatBeijingTime(metadata.GeoUpdatedAt))
-		}
-	}
-	successRate := float64(successes) / float64(total)
+	return result
+}
+
+func buildTargetCheckResult(proxyID int, targetProfile string, detected string, exitIP *string, baseLatency *int, metadata checkmeta.Metadata, target targetProbeResult) singleCheckResult {
 	baseReachable := exitIP != nil
-	status := targetAvailabilityStatus(targetProfile, baseReachable, serviceReachable, apiReachable)
-	grade := gradeResult(latency, successRate, serviceReachable, apiReachable)
+	latency := target.LatencyMS
+	if latency == nil {
+		latency = baseLatency
+	}
+	successes := target.Successes
+	if baseReachable {
+		successes++
+	}
+	total := maxInt(1, target.Total+1)
+	successRate := float64(successes) / float64(total)
+	status := targetAvailabilityStatus(targetProfile, baseReachable, target.ServiceReachable, target.APIReachable)
+	grade := gradeResult(latency, successRate, target.ServiceReachable, target.APIReachable)
 	if status == "failed" {
 		grade = "F"
 	}
-	recommended := recommendUse(targetProfile, baseReachable, serviceReachable, apiReachable, status)
 	var lastError *string
 	if status == "failed" {
-		msg := formatFailureError("target_unreachable", "proxy check failed")
-		lastError = &msg
+		message := formatFailureError("target_unreachable", "proxy check failed")
+		lastError = &message
 	}
-	return singleCheckResult{CheckResult: CheckResult{
+	result := CheckResult{
 		ProxyID:          proxyID,
 		Status:           status,
 		Grade:            grade,
 		LatencyMS:        latency,
 		ExitIP:           exitIP,
-		Country:          country,
-		CountryName:      countryName,
-		ContinentCode:    continentCode,
-		IPType:           ipType,
-		ASNOrg:           asnOrg,
-		GeoSource:        geoSource,
-		GeoUpdatedAt:     geoUpdatedAt,
+		Country:          nonEmptyStringPtr(metadata.Country),
+		CountryName:      nonEmptyStringPtr(metadata.CountryName),
+		ContinentCode:    nonEmptyStringPtr(metadata.ContinentCode),
+		IPType:           nonEmptyStringPtr(metadata.IPType),
+		ASNOrg:           nonEmptyStringPtr(metadata.ASNOrg),
+		GeoSource:        nonEmptyStringPtr(metadata.GeoSource),
 		SuccessRate:      successRate,
 		TargetProfile:    targetProfile,
-		DetectedProtocol: &detected,
-		ServiceReachable: serviceReachable,
-		APIReachable:     apiReachable,
-		CloudflareStatus: cloudflareStatus,
-		RecommendedUse:   recommended,
+		DetectedProtocol: stringPtr(detected),
+		ServiceReachable: target.ServiceReachable,
+		APIReachable:     target.APIReachable,
+		CloudflareStatus: target.CloudflareStatus,
+		RecommendedUse:   recommendUse(targetProfile, baseReachable, target.ServiceReachable, target.APIReachable, status),
 		LastError:        lastError,
 		BaseReachable:    baseReachable,
-	}, BaseReachable: baseReachable}
+	}
+	if !metadata.GeoUpdatedAt.IsZero() {
+		result.GeoUpdatedAt = stringPtr(formatBeijingTime(metadata.GeoUpdatedAt))
+	}
+	return singleCheckResult{CheckResult: result, BaseReachable: baseReachable}
+}
+
+func newCheckGeoCache() *checkGeoCache {
+	return newCheckGeoCacheWithLookup(func(ctx context.Context, ip string) checkmeta.Metadata {
+		return checkEnrichIP(ctx, nil, "", ip)
+	})
+}
+
+func newCheckGeoCacheWithLookup(lookup func(context.Context, string) checkmeta.Metadata) *checkGeoCache {
+	return &checkGeoCache{values: map[string]*checkGeoCacheEntry{}, lookup: lookup}
+}
+
+func (c *checkGeoCache) Lookup(ctx context.Context, ip string) checkmeta.Metadata {
+	if c == nil || strings.TrimSpace(ip) == "" {
+		return checkmeta.Metadata{}
+	}
+	c.mu.Lock()
+	if entry := c.values[ip]; entry != nil {
+		ready := entry.ready
+		c.mu.Unlock()
+		select {
+		case <-ready:
+			return entry.metadata
+		case <-ctx.Done():
+			return checkmeta.Metadata{}
+		}
+	}
+	entry := &checkGeoCacheEntry{ready: make(chan struct{})}
+	c.values[ip] = entry
+	c.mu.Unlock()
+	if c.lookup != nil {
+		entry.metadata = c.lookup(ctx, ip)
+	}
+	close(entry.ready)
+	return entry.metadata
+}
+
+func targetProbeMap(profiles []string, values []targetProbeResult) map[string]targetProbeResult {
+	out := make(map[string]targetProbeResult, len(profiles))
+	for index, profile := range profiles {
+		out[profile] = values[index]
+	}
+	return out
+}
+
+func anyTargetProbeReachable(results map[string]targetProbeResult) bool {
+	for _, result := range results {
+		if result.ServiceReachable || (result.APIReachable != nil && *result.APIReachable) {
+			return true
+		}
+	}
+	return false
+}
+
+func closeHTTPClientIdleConnections(client *http.Client) {
+	if client != nil {
+		client.CloseIdleConnections()
+	}
+}
+
+func nonEmptyStringPtr(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
+func stringSliceContains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func targetAvailabilityStatus(profile string, baseReachable bool, serviceReachable bool, apiReachable *bool) string {
