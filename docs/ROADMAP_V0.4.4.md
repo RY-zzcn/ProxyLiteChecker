@@ -1,7 +1,7 @@
 # ProxyLiteChecker v0.4.4 前端 UI 全面优化路线图
 
-- 状态：实现与本机 8899 验收完成，GitHub 发布中
-- 当前工作包：`GITHUB-RELEASE`
+- 状态：已完成并发布
+- 当前工作包：`COMPLETE`
 - 基线版本：`v0.4.3`
 - 目标版本：`v0.4.4`
 - 主题：无构建步骤的专业运维控制台视觉、响应式与可访问性升级
@@ -43,7 +43,7 @@
 
 - [x] Node 语法、HTML ID/绑定兼容、全量 Go test/vet/race、preflight、交叉编译和差异检查通过。
 - [x] 只更新现有 `127.0.0.1:8899`，完成登录、bootstrap、全页面桌面/手机截图和关键交互冒烟。
-- [ ] 创建发布提交、推送 main、annotated `v0.4.4` tag、GitHub Release、8 个资产和 GHCR amd64/arm64。
+- [x] 创建发布提交、推送 main、annotated `v0.4.4` tag、GitHub Release、8 个资产和 GHCR amd64/arm64。
 
 ## 4. 实时断点
 
@@ -87,3 +87,20 @@
 - 正在执行或准备执行的命令：`git add`、创建 v0.4.4 发布提交并推送 main。
 - 当前阻塞：无。
 - 唯一下一步：推送发布提交后创建并推送 annotated `v0.4.4` tag。
+
+- 断点更新：v0.4.4 发布提交 `54464d7` 已创建并推送到 GitHub main。
+- 正在执行或准备执行的命令：创建并推送 annotated `v0.4.4` tag，随后监控 CI、Release 和 Docker 工作流。
+- 当前阻塞：无。
+- 唯一下一步：推送 `v0.4.4` tag 触发正式发布。
+
+- 断点更新：annotated `v0.4.4` tag 已指向 `54464d754e8c900dc20b430e37c697a408856014` 并推送成功。
+- 正在执行或准备执行的命令：轮询 GitHub Actions；核验 Release 8 个资产、CI 内嵌 UI 测试和 GHCR amd64/arm64 manifest。
+- 当前阻塞：无，等待远端工作流完成。
+- 唯一下一步：取得 CI、Release 与 Docker 全部成功终态。
+
+- 断点更新：CI `29102285426`、Release `29102551657`、main Docker `29102285393`、tag Docker `29102552004` 全部成功。v0.4.4 Release 8 个资产全部 uploaded；GHCR `v0.4.4` 摘要 `sha256:a83d167deb9b0af7c68dc0acdb55026462dfe179c25af78480d0ded3070a4657`，包含 `linux/amd64` 与 `linux/arm64`。
+- 发布结果：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.4>；发布提交 `54464d7`；annotated tag `v0.4.4`。
+- 当前工作包：`COMPLETE`。
+- 正在执行或准备执行的命令：提交并推送发布后完成记录，确认 post-release CI/Docker 和工作区干净。
+- 当前阻塞：无。
+- 唯一下一步：完成发布后文档提交；之后等待用户制定下一路线。
