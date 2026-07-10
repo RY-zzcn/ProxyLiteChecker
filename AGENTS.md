@@ -27,17 +27,18 @@ When the user says to continue ProxyLiteChecker development, resume the roadmap,
 or asks for the next version, read these files before changing code:
 
 1. `docs/PROJECT_HANDOFF.md`
-2. `docs/ROADMAP_V0.4.0_TO_V0.4.2.md`
-3. `CHANGELOG.md`
+2. `docs/ROADMAP_V0.4.3.md`
+3. `docs/ROADMAP_V0.4.0_TO_V0.4.2.md`
+4. `CHANGELOG.md`
 
 The current canonical sequence is:
 
-- released: cumulative `v0.4.1`, containing the v0.4.0 state model and v0.4.1
-  persistent jobs/scheduler
-- current implementation and mandatory publication stage: `v0.4.2` proxy-first
-  checking, cached GeoIP enrichment, aggregate stats, lock-free gateway refresh,
-  and frontend polling reduction
-- no later version may start until v0.4.2 passes the existing 8899 acceptance and
+- released: `v0.4.2`, containing the state model, persistent scheduler,
+  proxy-first checking, cached GeoIP enrichment, aggregate stats, lock-free
+  gateway refresh, and frontend polling reduction
+- current implementation and mandatory publication stage: `v0.4.3` one-command
+  Linux deployment using GitHub Release binaries or formal GHCR images
+- no later version may start until v0.4.3 passes the existing 8899 acceptance and
   completes commit, push, annotated tag, GitHub Release, assets, CI, and GHCR
 
 Code, tests, CHANGELOG, release tags, the handoff document, and then the current

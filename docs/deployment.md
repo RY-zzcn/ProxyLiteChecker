@@ -1,5 +1,29 @@
 # ProxyLiteChecker Deployment
 
+## One-command Linux Deployment
+
+The preferred Linux installation is:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash
+```
+
+The script interactively selects either a verified GitHub Release binary with
+a system-level systemd service, or the matching formal-release GHCR image. Both
+modes use `/opt/ProxyLiteChecker`, preserve `.env` and `data/` on rerun, clean
+temporary downloads on exit, and require `http://127.0.0.1:8899/health` to pass.
+
+If Docker Engine, Compose, or the daemon is unavailable, the script asks before
+running Docker's official installer. Declining the installation or any install
+failure stops ProxyLiteChecker deployment immediately.
+
+Non-interactive mode examples:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode docker --yes
+```
+
 ## Local Service
 
 Build and run:

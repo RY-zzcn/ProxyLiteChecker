@@ -57,6 +57,14 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body: |
+            ## Linux 一键部署
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash
+            ```
+
+            可交互选择 GitHub Release 二进制或 GHCR Docker 镜像，统一安装到 `/opt/ProxyLiteChecker`。
+
             ## 下载哪个文件
 
             | 文件名 | 适用系统 | 说明 |

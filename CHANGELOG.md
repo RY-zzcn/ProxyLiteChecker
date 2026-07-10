@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.4.3 - 2026-07-10
+
+- Add one interactive Linux deployment script with binary and Docker choices, a fixed `/opt/ProxyLiteChecker` layout, secure first-run credentials, upgrade-safe config/data preservation, and automatic temporary-file cleanup.
+- Download architecture-specific binaries and `SHA256SUMS` from GitHub Releases, verify checksums, install atomically, and manage the binary deployment through a system-level systemd service.
+- Check Docker Engine, Compose, and daemon availability; explicitly ask before using Docker's official installer and stop deployment when installation is declined or fails.
+- Pin Docker deployments to the latest formal GitHub Release GHCR tag, switch cleanly between binary and container modes, and require the local port-8899 health check before reporting success.
+- Rewrite the README around the one-command deployment flow while retaining configuration, operations, ports, API, manual installation, backup, and development guidance.
+
 ## 0.4.2 - 2026-07-10
 
 - Execute multi-target checks proxy-first so protocol selection, exit-IP discovery, and local GeoIP run once per proxy and round instead of once per target.
