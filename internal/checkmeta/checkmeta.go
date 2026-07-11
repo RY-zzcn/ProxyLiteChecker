@@ -97,6 +97,34 @@ func DetectCloudflareStatus(statusCode int, headers http.Header, body string) st
 	return "not_cf"
 }
 
+func CloudflareBlocksAccess(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "challenge", "blocked":
+		return true
+	default:
+		return false
+	}
+}
+
+func MergeCloudflareStatus(statuses ...string) string {
+	priority := map[string]int{
+		"not_cf":    1,
+		"behind_cf": 2,
+		"challenge": 3,
+		"blocked":   4,
+	}
+	best := ""
+	bestPriority := 0
+	for _, status := range statuses {
+		status = strings.ToLower(strings.TrimSpace(status))
+		if priority[status] > bestPriority {
+			best = status
+			bestPriority = priority[status]
+		}
+	}
+	return best
+}
+
 func EnrichIP(ctx context.Context, client *http.Client, endpoint string, ip string) Metadata {
 	ip = strings.TrimSpace(ip)
 	metadata := Metadata{IPType: ClassifyIPType(ip)}

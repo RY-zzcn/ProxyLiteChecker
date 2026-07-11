@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -223,6 +226,177 @@ func TestGatewaySelectorSkipsIsolatedUpstream(t *testing.T) {
 	snapshot := gateway.endpointSelectorSnapshot(endpoint)
 	if snapshot.Active != 1 || snapshot.Skipped != 1 {
 		t.Fatalf("expected one active and one skipped upstream, got %#v", snapshot)
+	}
+}
+
+func TestGatewayImmediateFailureOpensCircuit(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{
+		Host:             "127.0.0.1",
+		Port:             0,
+		TargetProfiles:   []string{"openai"},
+		FailureThreshold: 3,
+		FailureCooldownS: 60,
+	})
+	endpoint := gateway.endpoints[0]
+	upstream := "http://1.1.1.1:8080"
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = gatewayTestPool(upstream)
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.mu.Unlock()
+	endpoint.selector.reportImmediateFailure(upstream, errors.New("Cloudflare blocked"))
+	endpoint.selector.mu.Lock()
+	state := endpoint.selector.failures[upstream]
+	endpoint.selector.mu.Unlock()
+	if state.Count < 3 || state.IsolatedUntil.Before(time.Now()) {
+		t.Fatalf("immediate failure did not open circuit: %#v", state)
+	}
+}
+
+func TestGatewayHTTPResponseClassification(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("CF-Ray", "test")
+	for _, tc := range []struct {
+		name      string
+		status    int
+		headers   http.Header
+		body      string
+		failed    bool
+		immediate bool
+	}{
+		{name: "challenge 200", status: 200, headers: headers, body: "checking your browser", failed: true, immediate: true},
+		{name: "cloudflare 403", status: 403, headers: headers, body: "denied", failed: true, immediate: true},
+		{name: "proxy auth", status: 407, failed: true, immediate: true},
+		{name: "provider rate limit", status: 429, failed: false},
+		{name: "ordinary forbidden", status: 403, failed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := classifyGatewayHTTPResponse(tc.status, tc.headers, tc.body)
+			if outcome.Failed != tc.failed || outcome.Immediate != tc.immediate {
+				t.Fatalf("unexpected outcome: %#v", outcome)
+			}
+		})
+	}
+}
+
+func TestGatewayHTTPCloudflareBlockRetriesNextUpstream(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{
+		Host:             "127.0.0.1",
+		Port:             0,
+		TargetProfiles:   []string{"openai"},
+		RetryAttempts:    2,
+		FailureThreshold: 3,
+		FailureCooldownS: 60,
+	})
+	endpoint := gateway.endpoints[0]
+	first := "http://1.1.1.1:8080"
+	second := "http://2.2.2.2:8080"
+	endpoint.selector.mu.Lock()
+	endpoint.selector.upstreams = gatewayTestPool(first, second)
+	endpoint.selector.upstreamsLoadedAt = time.Now()
+	endpoint.selector.mu.Unlock()
+	var calls atomic.Int32
+	gateway.newProxyClient = func(upstream string, _ int) (*http.Client, string, error) {
+		return &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			if upstream == first {
+				response := testHTTPResponse(http.StatusForbidden, "denied")
+				response.Header.Set("CF-Ray", "test")
+				return response, nil
+			}
+			return testHTTPResponse(http.StatusOK, "ok"), nil
+		})}, "http", nil
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	recorder := httptest.NewRecorder()
+	gateway.handleForward(recorder, req, endpoint)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok" || calls.Load() != 2 {
+		t.Fatalf("expected retry through second upstream, code=%d body=%q calls=%d", recorder.Code, recorder.Body.String(), calls.Load())
+	}
+	endpoint.selector.mu.Lock()
+	state := endpoint.selector.failures[first]
+	endpoint.selector.mu.Unlock()
+	if state.Count < 3 || state.IsolatedUntil.Before(time.Now()) {
+		t.Fatalf("Cloudflare-blocked upstream was not immediately isolated: %#v", state)
+	}
+}
+
+func TestGatewayBodyInspectionSkipsStreamingResponses(t *testing.T) {
+	stream := &http.Response{Header: make(http.Header)}
+	stream.Header.Set("CF-Ray", "test")
+	stream.Header.Set("Content-Type", "text/event-stream")
+	if shouldInspectGatewayResponseBody(stream) {
+		t.Fatal("streaming response body must not be prefetched")
+	}
+	html := &http.Response{Header: make(http.Header)}
+	html.Header.Set("Server", "cloudflare")
+	html.Header.Set("Content-Type", "text/html; charset=utf-8")
+	if !shouldInspectGatewayResponseBody(html) {
+		t.Fatal("Cloudflare HTML response should be inspected for challenge markers")
+	}
+}
+
+func TestGatewayTunnelOutcomeClassification(t *testing.T) {
+	if outcome := classifyGatewayTunnelResult(gatewayTunnelResult{Duration: time.Second, ClientToUpstreamBytes: 128}); outcome != gatewayTunnelFailure {
+		t.Fatalf("expected early zero-response tunnel failure, got %q", outcome)
+	}
+	if outcome := classifyGatewayTunnelResult(gatewayTunnelResult{Duration: time.Second, ClientToUpstreamBytes: 128, UpstreamToClientBytes: 64}); outcome != gatewayTunnelSuccess {
+		t.Fatalf("expected upstream-response tunnel success, got %q", outcome)
+	}
+	if outcome := classifyGatewayTunnelResult(gatewayTunnelResult{Duration: time.Second}); outcome != gatewayTunnelNeutral {
+		t.Fatalf("client closed without traffic must be neutral, got %q", outcome)
+	}
+	if outcome := classifyGatewayTunnelResult(gatewayTunnelResult{Duration: 10 * time.Second, ClientToUpstreamBytes: 128}); outcome != gatewayTunnelSuccess {
+		t.Fatalf("long-lived upload-only tunnel must not be treated as early failure, got %q", outcome)
+	}
+}
+
+func TestGatewayNeutralTunnelReleasesHalfOpenSlot(t *testing.T) {
+	gateway := newGatewayServer(nil, gatewayConfig{Host: "127.0.0.1", Port: 0, TargetProfiles: []string{"openai"}, FailureThreshold: 1, FailureCooldownS: 60})
+	endpoint := gateway.endpoints[0]
+	upstream := "http://1.1.1.1:8080"
+	endpoint.selector.mu.Lock()
+	endpoint.selector.failures[upstream] = gatewayUpstreamFailure{Count: 1, HalfOpenInFlight: 1}
+	endpoint.selector.mu.Unlock()
+	gateway.recordTunnelResult(endpoint, "http_connect", "127.0.0.1", upstream, time.Millisecond, gatewayTunnelResult{Duration: time.Millisecond})
+	endpoint.selector.mu.Lock()
+	state := endpoint.selector.failures[upstream]
+	endpoint.selector.mu.Unlock()
+	if state.HalfOpenInFlight != 0 || state.Count != 1 {
+		t.Fatalf("neutral tunnel did not release half-open slot without changing failures: %#v", state)
+	}
+}
+
+func TestPipeBidirectionalReportsTraffic(t *testing.T) {
+	clientApp, gatewayClient := net.Pipe()
+	gatewayUpstream, upstreamApp := net.Pipe()
+	done := make(chan gatewayTunnelResult, 1)
+	pipeBidirectional(gatewayClient, gatewayUpstream, func(result gatewayTunnelResult) {
+		done <- result
+	})
+
+	go func() {
+		_, _ = clientApp.Write([]byte("hello"))
+	}()
+	request := make([]byte, 5)
+	if _, err := io.ReadFull(upstreamApp, request); err != nil || string(request) != "hello" {
+		t.Fatalf("upstream request=%q err=%v", request, err)
+	}
+	go func() {
+		_, _ = upstreamApp.Write([]byte("world"))
+	}()
+	response := make([]byte, 5)
+	if _, err := io.ReadFull(clientApp, response); err != nil || string(response) != "world" {
+		t.Fatalf("client response=%q err=%v", response, err)
+	}
+	_ = clientApp.Close()
+	_ = upstreamApp.Close()
+	select {
+	case result := <-done:
+		if result.ClientToUpstreamBytes < 5 || result.UpstreamToClientBytes < 5 || result.Duration <= 0 {
+			t.Fatalf("unexpected tunnel result: %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tunnel result")
 	}
 }
 

@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scrip
 部署指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.5
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.6
 ```
 
 ## 升级
@@ -128,7 +128,7 @@ sudo docker compose logs -f
 ## 核心能力
 
 - 支持 HTTP、HTTPS、SOCKS4、SOCKS5、SOCKS5H 代理。
-- 检测基础链路、出口 IP、延迟、国家地区、目标 Web/API 和 Cloudflare 状态。
+- 检测基础链路、出口 IP、延迟、国家地区、目标 Web/API 和 Cloudflare 状态；`challenge/blocked` 不会进入对应目标导出或网关池。
 - 内置公开代理源，也支持手动批量导入。
 - 自动拉取、低库存补源、自动检测、失败清理和过期重检。
 - 检测目标支持常规、OpenAI、Grok、Gemini、Claude。
@@ -137,7 +137,7 @@ sudo docker compose logs -f
 - 外部 IP 元数据通过有界后台队列和 SQLite 缓存异步补充。
 - 任务历史、调度时间、失败退避和重启中断状态持久化。
 - 提供按目标和国家筛选的 TXT/JSON 导出。
-- 每个目标提供固定 HTTP/SOCKS5 本机网关，支持 EWMA、隔离、half-open 和降级选路。
+- 每个目标提供固定 HTTP/SOCKS5 本机网关，支持 EWMA、隔离、half-open、降级选路、Cloudflare/407 实时切换和 CONNECT/SOCKS5 早期隧道失败反馈。
 - 原生 Web 控制台支持浅色/深色主题、精确区域导航、单开自动化设置、秒级动态数据、30 条内存运行日志和移动端代理卡片。
 
 ## 默认端口
@@ -237,7 +237,7 @@ docker run -d --name proxylitechecker \
   -e SECRET_KEY='请改成强随机字符串' \
   -e PLC_REQUIRE_SECURE=1 \
   -v proxylite-data:/app/data \
-  ghcr.io/ry-zzcn/proxylitechecker:v0.4.5
+  ghcr.io/ry-zzcn/proxylitechecker:v0.4.6
 ```
 
 ## 手动下载二进制
@@ -289,4 +289,5 @@ go build -o bin/proxylite ./cmd/proxylite
 - [v0.4.3 一键部署路线图](docs/ROADMAP_V0.4.3.md)
 - [v0.4.4 前端 UI 优化路线图](docs/ROADMAP_V0.4.4.md)
 - [v0.4.5 实时控制台与任务可观测性路线图](docs/ROADMAP_V0.4.5.md)
+- [v0.4.6 真实流量熔断与 Cloudflare 严格判定路线图](docs/ROADMAP_V0.4.6.md)
 - [更新记录](CHANGELOG.md)

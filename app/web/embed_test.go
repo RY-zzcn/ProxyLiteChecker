@@ -5,20 +5,20 @@ import (
 	"testing"
 )
 
-func TestEmbeddedConsoleIncludesV045LiveInterface(t *testing.T) {
+func TestEmbeddedConsoleIncludesV046GatewayReliability(t *testing.T) {
 	t.Parallel()
 	checks := map[string][]string{
 		"index.html": {
 			`id="themeToggle"`,
 			`class="workspace-nav"`,
 			`<details class="settings-group`,
-			`id="versionText">v0.4.5`,
+			`id="versionText">v0.4.6`,
 			`id="runtimeLogs"`,
 			`name="automation-settings"`,
 		},
 		"static/styles.css": {
 			"v0.4.4 interface system",
-			"v0.4.5 live operations refinement",
+			"v0.4.6 passive gateway reliability",
 			`:root[data-theme="dark"]`,
 			"@media (prefers-reduced-motion: reduce)",
 		},

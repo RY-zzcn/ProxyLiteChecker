@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/RY-zzcn/ProxyLiteChecker/internal/checkmeta"
 )
 
 type gatewayConfig struct {
@@ -41,27 +45,30 @@ type gatewayConfig struct {
 type gatewayDialFunc func(ctx context.Context, proxyURL string, target string, timeout time.Duration) (net.Conn, error)
 
 type gatewayServer struct {
-	store         *store
-	mu            sync.RWMutex
-	cfg           gatewayConfig
-	endpoints     []*gatewayEndpoint
-	startedAt     string
-	dialProxy     gatewayDialFunc
-	loadUpstreams func(availableProxyFilter) ([]gatewayUpstream, error)
-	eventMu       sync.Mutex
-	events        []gatewayEvent
-	statusMu      sync.Mutex
-	statusAt      time.Time
-	statusGen     uint64
-	cacheGen      uint64
-	storeGen      uint64
-	status        map[string]any
+	store          *store
+	mu             sync.RWMutex
+	cfg            gatewayConfig
+	endpoints      []*gatewayEndpoint
+	startedAt      string
+	dialProxy      gatewayDialFunc
+	newProxyClient func(proxyURL string, requestTimeout int) (*http.Client, string, error)
+	loadUpstreams  func(availableProxyFilter) ([]gatewayUpstream, error)
+	eventMu        sync.Mutex
+	events         []gatewayEvent
+	statusMu       sync.Mutex
+	statusAt       time.Time
+	statusGen      uint64
+	cacheGen       uint64
+	storeGen       uint64
+	status         map[string]any
 }
 
 const (
 	gatewayRecentLimit             = 5
 	gatewayEventLimit              = 100
 	gatewayUpstreamRefreshInterval = 30 * time.Second
+	gatewayResponseProbeLimit      = 2048
+	gatewayTunnelEarlyFailure      = 5 * time.Second
 )
 
 type gatewayEndpoint struct {
@@ -97,10 +104,31 @@ type gatewayEvent struct {
 	DurationMS    int64  `json:"duration_ms,omitempty"`
 }
 
+type gatewayHTTPResponseOutcome struct {
+	Failed           bool
+	Immediate        bool
+	Reason           string
+	CloudflareStatus string
+}
+
+type gatewayTunnelResult struct {
+	Duration              time.Duration
+	ClientToUpstreamBytes int64
+	UpstreamToClientBytes int64
+}
+
+type gatewayTunnelOutcome string
+
+const (
+	gatewayTunnelNeutral gatewayTunnelOutcome = "neutral"
+	gatewayTunnelSuccess gatewayTunnelOutcome = "success"
+	gatewayTunnelFailure gatewayTunnelOutcome = "failure"
+)
+
 func newGatewayServer(store *store, cfg gatewayConfig) *gatewayServer {
 	cfg = normalizeGatewayConfig(cfg)
 	profiles := normalizeTargetProfiles(cfg.TargetProfiles)
-	gateway := &gatewayServer{store: store, cfg: cfg, startedAt: nowString(), dialProxy: dialThroughProxy}
+	gateway := &gatewayServer{store: store, cfg: cfg, startedAt: nowString(), dialProxy: dialThroughProxy, newProxyClient: proxyHTTPClient}
 	if store != nil {
 		gateway.loadUpstreams = store.GatewayUpstreamCandidates
 	}
@@ -500,7 +528,11 @@ func (g *gatewayServer) handleForward(w http.ResponseWriter, r *http.Request, en
 		tried[upstream] = true
 		lastUpstream = upstream
 		atomic.AddInt64(&endpoint.upstreamAttempts, 1)
-		client, _, err := proxyHTTPClient(upstream, cfg.RequestTimeoutS)
+		clientFactory := g.newProxyClient
+		if clientFactory == nil {
+			clientFactory = proxyHTTPClient
+		}
+		client, _, err := clientFactory(upstream, cfg.RequestTimeoutS)
 		if err != nil {
 			lastErr = err
 			endpoint.recordUpstreamFailure(upstream, err)
@@ -530,6 +562,45 @@ func (g *gatewayServer) handleForward(w http.ResponseWriter, r *http.Request, en
 				DurationMS:    time.Since(started).Milliseconds(),
 			})
 			continue
+		}
+		bodyProbe := ""
+		if shouldInspectGatewayResponseBody(resp) {
+			prefix, err := readGatewayResponsePrefix(resp)
+			if err != nil {
+				_ = resp.Body.Close()
+				lastErr = fmt.Errorf("read upstream response: %w", err)
+				endpoint.recordUpstreamFailure(upstream, lastErr)
+				continue
+			}
+			bodyProbe = string(prefix)
+		}
+		outcome := classifyGatewayHTTPResponse(resp.StatusCode, resp.Header, bodyProbe)
+		if outcome.Failed {
+			lastErr = errors.New(outcome.Reason)
+			if outcome.Immediate {
+				endpoint.recordImmediateUpstreamFailure(upstream, lastErr)
+			} else {
+				endpoint.recordUpstreamFailure(upstream, lastErr)
+			}
+			g.recordEvent(gatewayEvent{
+				TargetProfile: endpoint.TargetProfile,
+				GatewayType:   "http",
+				ClientIP:      clientIP,
+				Upstream:      upstream,
+				EventType:     "upstream_response_rejected",
+				Message:       outcome.Reason,
+				DurationMS:    time.Since(started).Milliseconds(),
+			})
+			if attempt+1 < attempts {
+				_ = resp.Body.Close()
+				continue
+			}
+			defer resp.Body.Close()
+			copyHeader(w.Header(), resp.Header)
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			endpoint.recordFinalFailure(upstream, lastErr)
+			return
 		}
 		defer resp.Body.Close()
 		copyHeader(w.Header(), resp.Header)
@@ -589,7 +660,7 @@ func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request, en
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		_ = upstreamConn.Close()
-		endpoint.recordFailure(upstream, fmt.Errorf("hijacking not supported"))
+		endpoint.recordFinalFailure(upstream, fmt.Errorf("hijacking not supported"))
 		g.recordEvent(gatewayEvent{
 			TargetProfile: endpoint.TargetProfile,
 			GatewayType:   "http_connect",
@@ -605,7 +676,7 @@ func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request, en
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		_ = upstreamConn.Close()
-		endpoint.recordFailure(upstream, err)
+		endpoint.recordFinalFailure(upstream, err)
 		g.recordEvent(gatewayEvent{
 			TargetProfile: endpoint.TargetProfile,
 			GatewayType:   "http_connect",
@@ -618,8 +689,10 @@ func (g *gatewayServer) handleConnect(w http.ResponseWriter, r *http.Request, en
 		return
 	}
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	endpoint.recordSuccess(upstream, time.Since(started))
-	pipeBidirectional(clientConn, upstreamConn)
+	connectLatency := time.Since(started)
+	pipeBidirectional(clientConn, upstreamConn, func(result gatewayTunnelResult) {
+		g.recordTunnelResult(endpoint, "http_connect", clientIP, upstream, connectLatency, result)
+	})
 }
 
 func (g *gatewayServer) selectUpstream(endpoint *gatewayEndpoint) (string, error) {
@@ -755,6 +828,22 @@ func (e *gatewayEndpoint) recordUpstreamFailure(upstream string, err error) {
 	}
 }
 
+func (e *gatewayEndpoint) recordImmediateUpstreamFailure(upstream string, err error) {
+	if upstream != "" && e.selector != nil {
+		e.selector.reportImmediateFailure(upstream, err)
+		e.lastUpstream.Store(maskProxyURL(upstream))
+	}
+	if err != nil {
+		e.lastError.Store(err.Error())
+	}
+}
+
+func (e *gatewayEndpoint) recordNeutral(upstream string) {
+	if upstream != "" && e.selector != nil {
+		e.selector.reportNeutral(upstream)
+	}
+}
+
 func (e *gatewayEndpoint) recordFinalFailure(upstream string, err error) {
 	atomic.AddInt64(&e.failedRequests, 1)
 	if upstream != "" {
@@ -828,7 +917,7 @@ func (g *gatewayServer) handleSocks5Conn(client net.Conn, endpoint *gatewayEndpo
 	if err := writeSocks5Reply(client, 0x00); err != nil {
 		_ = client.Close()
 		_ = upstreamConn.Close()
-		endpoint.recordFailure(upstream, err)
+		endpoint.recordFinalFailure(upstream, err)
 		g.recordEvent(gatewayEvent{
 			TargetProfile: endpoint.TargetProfile,
 			GatewayType:   "socks5",
@@ -841,8 +930,10 @@ func (g *gatewayServer) handleSocks5Conn(client net.Conn, endpoint *gatewayEndpo
 		return
 	}
 	_ = client.SetDeadline(time.Time{})
-	endpoint.recordSuccess(upstream, time.Since(started))
-	pipeBidirectional(client, upstreamConn)
+	connectLatency := time.Since(started)
+	pipeBidirectional(client, upstreamConn, func(result gatewayTunnelResult) {
+		g.recordTunnelResult(endpoint, "socks5", clientIP, upstream, connectLatency, result)
+	})
 }
 
 func hostOnly(value string) string {
@@ -1059,19 +1150,126 @@ func ensureProxyAddress(proxy *url.URL) string {
 	return net.JoinHostPort(proxy.Hostname(), port)
 }
 
-func pipeBidirectional(left net.Conn, right net.Conn) {
+func readGatewayResponsePrefix(resp *http.Response) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, errors.New("empty upstream response body")
+	}
+	prefix, err := io.ReadAll(io.LimitReader(resp.Body, gatewayResponseProbeLimit))
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = &gatewayReplayBody{
+		Reader: io.MultiReader(bytes.NewReader(prefix), resp.Body),
+		Closer: resp.Body,
+	}
+	return prefix, nil
+}
+
+func shouldInspectGatewayResponseBody(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	server := strings.ToLower(resp.Header.Get("Server"))
+	cloudflare := resp.Header.Get("CF-Ray") != "" || strings.Contains(server, "cloudflare")
+	if !cloudflare {
+		return false
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	return strings.Contains(contentType, "text/html")
+}
+
+type gatewayReplayBody struct {
+	io.Reader
+	io.Closer
+}
+
+func classifyGatewayHTTPResponse(statusCode int, headers http.Header, body string) gatewayHTTPResponseOutcome {
+	cloudflare := checkmeta.DetectCloudflareStatus(statusCode, headers, body)
+	if checkmeta.CloudflareBlocksAccess(cloudflare) {
+		return gatewayHTTPResponseOutcome{
+			Failed:           true,
+			Immediate:        true,
+			Reason:           "Cloudflare " + cloudflare,
+			CloudflareStatus: cloudflare,
+		}
+	}
+	if statusCode == http.StatusProxyAuthRequired {
+		return gatewayHTTPResponseOutcome{Failed: true, Immediate: true, Reason: "upstream proxy authentication required", CloudflareStatus: cloudflare}
+	}
+	return gatewayHTTPResponseOutcome{CloudflareStatus: cloudflare}
+}
+
+func classifyGatewayTunnelResult(result gatewayTunnelResult) gatewayTunnelOutcome {
+	if result.UpstreamToClientBytes > 0 {
+		return gatewayTunnelSuccess
+	}
+	if result.ClientToUpstreamBytes == 0 {
+		return gatewayTunnelNeutral
+	}
+	if result.Duration <= gatewayTunnelEarlyFailure {
+		return gatewayTunnelFailure
+	}
+	return gatewayTunnelSuccess
+}
+
+func (g *gatewayServer) recordTunnelResult(endpoint *gatewayEndpoint, gatewayType string, clientIP string, upstream string, connectLatency time.Duration, result gatewayTunnelResult) {
+	switch classifyGatewayTunnelResult(result) {
+	case gatewayTunnelSuccess:
+		endpoint.recordSuccess(upstream, connectLatency)
+	case gatewayTunnelFailure:
+		err := fmt.Errorf("early tunnel failure: upstream returned no data after %d client byte(s)", result.ClientToUpstreamBytes)
+		endpoint.recordFailure(upstream, err)
+		g.recordEvent(gatewayEvent{
+			TargetProfile: endpoint.TargetProfile,
+			GatewayType:   gatewayType,
+			ClientIP:      clientIP,
+			Upstream:      upstream,
+			EventType:     "tunnel_early_failure",
+			Message:       err.Error(),
+			DurationMS:    result.Duration.Milliseconds(),
+		})
+	case gatewayTunnelNeutral:
+		endpoint.recordNeutral(upstream)
+	}
+	g.invalidateStatus()
+}
+
+func pipeBidirectional(left net.Conn, right net.Conn, onDone func(gatewayTunnelResult)) {
+	started := time.Now()
 	var once sync.Once
 	closeBoth := func() {
 		_ = left.Close()
 		_ = right.Close()
 	}
+	type copyResult struct {
+		upstreamToClient bool
+		bytes            int64
+	}
+	results := make(chan copyResult, 2)
 	go func() {
-		_, _ = io.Copy(left, right)
+		copied, _ := io.Copy(left, right)
+		results <- copyResult{upstreamToClient: true, bytes: copied}
 		once.Do(closeBoth)
 	}()
 	go func() {
-		_, _ = io.Copy(right, left)
+		copied, _ := io.Copy(right, left)
+		results <- copyResult{bytes: copied}
 		once.Do(closeBoth)
+	}()
+	go func() {
+		result := gatewayTunnelResult{}
+		for range 2 {
+			copied := <-results
+			if copied.upstreamToClient {
+				result.UpstreamToClientBytes = copied.bytes
+			} else {
+				result.ClientToUpstreamBytes = copied.bytes
+			}
+		}
+		result.Duration = time.Since(started)
+		if onDone != nil {
+			onDone(result)
+		}
 	}()
 }
 

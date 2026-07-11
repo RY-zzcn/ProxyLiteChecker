@@ -121,7 +121,7 @@ func TestTaskSchedulerMigrationFromV040IsIdempotent(t *testing.T) {
 		t.Fatalf("repeat v0.4.1 migration: %v", err)
 	}
 	version, err := st.SchemaVersion()
-	if err != nil || version != geoCacheMigrationVersion {
+	if err != nil || version != cloudflareTargetMigrationVersion {
 		t.Fatalf("unexpected schema version=%d err=%v", version, err)
 	}
 	for _, table := range []string{"job_runs", "scheduler_state", "coordinator_state"} {

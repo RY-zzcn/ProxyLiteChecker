@@ -446,6 +446,28 @@ func (s *gatewaySelector) reportSuccess(upstream string, latency time.Duration) 
 }
 
 func (s *gatewaySelector) reportFailure(upstream string, err error) {
+	s.reportFailureMode(upstream, err, false)
+}
+
+func (s *gatewaySelector) reportImmediateFailure(upstream string, err error) {
+	s.reportFailureMode(upstream, err, true)
+}
+
+func (s *gatewaySelector) reportNeutral(upstream string) {
+	if strings.TrimSpace(upstream) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.failures[upstream]
+	if !ok || state.HalfOpenInFlight == 0 {
+		return
+	}
+	state.HalfOpenInFlight = 0
+	s.failures[upstream] = state
+}
+
+func (s *gatewaySelector) reportFailureMode(upstream string, err error, immediate bool) {
 	if strings.TrimSpace(upstream) == "" {
 		return
 	}
@@ -456,6 +478,9 @@ func (s *gatewaySelector) reportFailure(upstream string, err error) {
 	state.Samples++
 	state.SuccessEWMA = ewma(state.SuccessEWMA, 0, state.Samples)
 	state.Count++
+	if immediate && state.Count < s.failureThreshold {
+		state.Count = s.failureThreshold
+	}
 	state.LastFailureAt = now
 	state.HalfOpenInFlight = 0
 	if err != nil {

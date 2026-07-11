@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RY-zzcn/ProxyLiteChecker/internal/checkmeta"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -124,6 +126,7 @@ type proxyTargetSummary struct {
 const stateModelMigrationVersion = 400001
 const taskSchedulerMigrationVersion = 401001
 const geoCacheMigrationVersion = 402001
+const cloudflareTargetMigrationVersion = 406001
 
 type parsedProxy struct {
 	Host     string
@@ -427,6 +430,9 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	if err := s.applyGeoCacheMigrationIfNeeded(); err != nil {
 		return err
 	}
+	if err := s.applyCloudflareTargetMigrationIfNeeded(); err != nil {
+		return err
+	}
 	if err := s.ensurePerformanceIndexes(); err != nil {
 		return err
 	}
@@ -435,6 +441,56 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		return err
 	}
 	log.Printf("database schema version: %d", version)
+	return nil
+}
+
+func (s *store) applyCloudflareTargetMigrationIfNeeded() error {
+	var applied int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", cloudflareTargetMigrationVersion).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`
+UPDATE proxy_target_state
+SET status = 'failed',
+    status_changed_at = CASE WHEN status != 'failed' THEN datetime('now', '+8 hours') ELSE status_changed_at END,
+    grade = 'F',
+    failure_reason = 'cloudflare',
+    last_error = '[cloudflare] Cloudflare ' || LOWER(cloudflare_status),
+    consecutive_failures = CASE WHEN status = 'failed' THEN consecutive_failures ELSE consecutive_failures + 1 END,
+    updated_at = datetime('now', '+8 hours')
+WHERE LOWER(COALESCE(cloudflare_status, '')) IN ('blocked', 'challenge');
+
+UPDATE proxy_checks
+SET status = 'failed',
+    status_changed_at = CASE WHEN status != 'failed' THEN datetime('now', '+8 hours') ELSE status_changed_at END,
+    grade = 'F',
+    last_error = '[cloudflare] Cloudflare ' || LOWER(cloudflare_status),
+    updated_at = datetime('now', '+8 hours')
+WHERE LOWER(COALESCE(cloudflare_status, '')) IN ('blocked', 'challenge');
+
+INSERT INTO schema_migrations (version, name, applied_at, app_version)
+VALUES (?, 'v0.4.6_cloudflare_target_strict', datetime('now', '+8 hours'), ?)
+`, cloudflareTargetMigrationVersion, appVersion); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	log.Printf("database migration applied: version=%d name=v0.4.6_cloudflare_target_strict", cloudflareTargetMigrationVersion)
 	return nil
 }
 
@@ -1637,6 +1693,9 @@ func saveCheckResultTx(ctx context.Context, tx *sql.Tx, result CheckResult, writ
 		capability = "base"
 	}
 	targetStatus := normalizeTargetStateStatus(targetProfile, result.Status, capability)
+	if result.CloudflareStatus != nil && checkmeta.CloudflareBlocksAccess(*result.CloudflareStatus) {
+		targetStatus = "failed"
+	}
 	probeStatus := normalizeProbeStateStatus(result)
 	failureReason := ""
 	if result.LastError != nil {

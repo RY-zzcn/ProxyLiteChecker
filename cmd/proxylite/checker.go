@@ -729,18 +729,18 @@ func probeTargetWithClient(ctx context.Context, client *http.Client, profile Tar
 	probeCtx, cancel := targetContext(ctx, profile)
 	defer cancel()
 	result := targetProbeResult{Total: 1}
-	if ok, cloudflare := serviceOKStatus(probeCtx, client, profile, profile.ServiceURL, serviceAllowedStatus(profile)); ok {
+	serviceOK, serviceCloudflare := serviceOKStatus(probeCtx, client, profile, profile.ServiceURL, serviceAllowedStatus(profile))
+	if serviceOK {
 		result.ServiceReachable = true
 		result.Successes++
 		latency := int(time.Since(started).Milliseconds())
 		result.LatencyMS = &latency
-		result.CloudflareStatus = stringPtr(cloudflare)
-	} else if cloudflare != "" {
-		result.CloudflareStatus = &cloudflare
 	}
+	cloudflareStatuses := []string{serviceCloudflare}
 	if profile.APIURL != "" {
 		result.Total++
-		ok := okStatus(probeCtx, client, profile, profile.APIURL, apiAllowedStatus(profile))
+		ok, apiCloudflare := apiOKStatus(probeCtx, client, profile, profile.APIURL, apiAllowedStatus(profile))
+		cloudflareStatuses = append(cloudflareStatuses, apiCloudflare)
 		result.APIReachable = &ok
 		if ok {
 			result.Successes++
@@ -749,6 +749,9 @@ func probeTargetWithClient(ctx context.Context, client *http.Client, profile Tar
 				result.LatencyMS = &latency
 			}
 		}
+	}
+	if cloudflare := checkmeta.MergeCloudflareStatus(cloudflareStatuses...); cloudflare != "" {
+		result.CloudflareStatus = stringPtr(cloudflare)
 	}
 	return result
 }
@@ -765,7 +768,11 @@ func buildTargetCheckResult(proxyID int, targetProfile string, detected string, 
 	}
 	total := maxInt(1, target.Total+1)
 	successRate := float64(successes) / float64(total)
-	status := targetAvailabilityStatus(targetProfile, baseReachable, target.ServiceReachable, target.APIReachable)
+	cloudflareStatus := ""
+	if target.CloudflareStatus != nil {
+		cloudflareStatus = *target.CloudflareStatus
+	}
+	status := targetAvailabilityStatus(targetProfile, baseReachable, target.ServiceReachable, target.APIReachable, cloudflareStatus)
 	grade := gradeResult(latency, successRate, target.ServiceReachable, target.APIReachable)
 	if status == "failed" {
 		grade = "F"
@@ -884,7 +891,10 @@ func errorString(err error) string {
 	return err.Error()
 }
 
-func targetAvailabilityStatus(profile string, baseReachable bool, serviceReachable bool, apiReachable *bool) string {
+func targetAvailabilityStatus(profile string, baseReachable bool, serviceReachable bool, apiReachable *bool, cloudflareStatus string) string {
+	if checkmeta.CloudflareBlocksAccess(cloudflareStatus) {
+		return "failed"
+	}
 	if normalizeTargetProfile(profile) == "generic" {
 		if baseReachable || serviceReachable {
 			return "available"
@@ -1236,7 +1246,26 @@ func serviceOKStatus(ctx context.Context, client *http.Client, profile TargetPro
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	_, _ = io.Copy(io.Discard, resp.Body)
 	body := string(raw)
-	return allowed[resp.StatusCode] && keywordMatched(profile, body), checkmeta.DetectCloudflareStatus(resp.StatusCode, resp.Header, body)
+	cloudflare := checkmeta.DetectCloudflareStatus(resp.StatusCode, resp.Header, body)
+	return allowed[resp.StatusCode] && keywordMatched(profile, body) && !checkmeta.CloudflareBlocksAccess(cloudflare), cloudflare
+}
+
+func apiOKStatus(ctx context.Context, client *http.Client, profile TargetProfile, target string, allowed map[int]bool) (bool, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return false, ""
+	}
+	applyProfileHeaders(req, profile)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, ""
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	_, _ = io.Copy(io.Discard, resp.Body)
+	body := string(raw)
+	cloudflare := checkmeta.DetectCloudflareStatus(resp.StatusCode, resp.Header, body)
+	return allowed[resp.StatusCode] && keywordMatched(profile, body) && !checkmeta.CloudflareBlocksAccess(cloudflare), cloudflare
 }
 
 func targetContext(ctx context.Context, profile TargetProfile) (context.Context, context.CancelFunc) {
@@ -1365,13 +1394,13 @@ func combineRoundResults(profile string, results []singleCheckResult) CheckResul
 	serviceReachable := false
 	apiSeen := false
 	apiReachableValue := false
-	var cloudflareStatus *string
+	cloudflareStatuses := []string{}
 	for _, result := range results {
 		successRate += result.SuccessRate
 		baseReachable = baseReachable || result.BaseReachable
 		serviceReachable = serviceReachable || result.ServiceReachable
-		if cloudflareStatus == nil && result.CloudflareStatus != nil {
-			cloudflareStatus = result.CloudflareStatus
+		if result.CloudflareStatus != nil {
+			cloudflareStatuses = append(cloudflareStatuses, *result.CloudflareStatus)
 		}
 		if result.APIReachable != nil {
 			apiSeen = true
@@ -1397,7 +1426,11 @@ func combineRoundResults(profile string, results []singleCheckResult) CheckResul
 	}
 	output.ServiceReachable = serviceReachable
 	output.APIReachable = apiReachable
-	output.CloudflareStatus = cloudflareStatus
+	if cloudflareStatus := checkmeta.MergeCloudflareStatus(cloudflareStatuses...); cloudflareStatus != "" {
+		output.CloudflareStatus = stringPtr(cloudflareStatus)
+	} else {
+		output.CloudflareStatus = nil
+	}
 	output.BaseReachable = baseReachable
 	output.RecommendedUse = recommendUse(profile, baseReachable, serviceReachable, apiReachable, status)
 	if status == "failed" {

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-07-11
+
+- Detect Cloudflare status on both target Web and API probes, merge the most severe result, and reject `challenge` or `blocked` responses even when their HTTP status would otherwise be accepted.
+- Enforce the Cloudflare target-availability invariant again in the SQLite save path so blocked results cannot enter target exports or gateway pools through alternate callers.
+- Add schema migration `406001` to reclassify legacy `available + Cloudflare blocked/challenge` target and compatibility rows immediately during upgrade.
+- Inspect only bounded Cloudflare HTML response prefixes on real HTTP gateway traffic, immediately isolate blocked/challenged upstreams, and retry safe requests through the next untried proxy without buffering streaming responses.
+- Treat upstream proxy `407` responses as immediate runtime circuit failures while keeping ordinary non-Cloudflare `401`, `403`, and `429` responses from falsely penalizing a working proxy.
+- Feed CONNECT and SOCKS5 tunnel duration plus bidirectional byte counts back into the runtime circuit breaker, marking short client-data/zero-upstream-response tunnels as failures and successful upstream traffic as healthy.
+- Stop client-side Hijack, handshake-reply, empty-tunnel, and cancellation paths from incorrectly increasing upstream failure counts; release neutral half-open probes without erasing failure history.
+
 ## 0.4.5 - 2026-07-11
 
 - Replace the floating top section pill with an adaptive navigation model: a restrained sticky side rail on desktop and an in-flow compact horizontal navigator on smaller screens.

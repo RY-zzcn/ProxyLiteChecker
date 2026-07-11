@@ -42,18 +42,52 @@ func TestFailureReasonFormattingAndParsing(t *testing.T) {
 
 func TestNamedTargetRequiresTargetReachability(t *testing.T) {
 	apiUnavailable := false
-	if status := targetAvailabilityStatus("grok", true, false, &apiUnavailable); status != "failed" {
+	if status := targetAvailabilityStatus("grok", true, false, &apiUnavailable, "not_cf"); status != "failed" {
 		t.Fatalf("expected base-only Grok result to fail target availability, got %q", status)
 	}
 	if use := recommendUse("grok", true, false, &apiUnavailable, "failed"); use != "base" {
 		t.Fatalf("expected base-only capability to be preserved, got %q", use)
 	}
 	apiAvailable := true
-	if status := targetAvailabilityStatus("grok", false, false, &apiAvailable); status != "available" {
+	if status := targetAvailabilityStatus("grok", false, false, &apiAvailable, "not_cf"); status != "available" {
 		t.Fatalf("expected reachable Grok API to be available, got %q", status)
 	}
-	if status := targetAvailabilityStatus("generic", true, false, nil); status != "available" {
+	if status := targetAvailabilityStatus("generic", true, false, nil, "not_cf"); status != "available" {
 		t.Fatalf("expected generic base reachability to remain available, got %q", status)
+	}
+}
+
+func TestCloudflareBlockedTargetIsUnavailable(t *testing.T) {
+	apiAvailable := true
+	for _, status := range []string{"challenge", "blocked"} {
+		if got := targetAvailabilityStatus("openai", true, true, &apiAvailable, status); got != "failed" {
+			t.Fatalf("Cloudflare %s must fail target availability, got %q", status, got)
+		}
+	}
+	if got := targetAvailabilityStatus("openai", false, false, &apiAvailable, "behind_cf"); got != "available" {
+		t.Fatalf("behind_cf must not reject a reachable API, got %q", got)
+	}
+}
+
+func TestTargetProbeRejectsCloudflareChallengeAndBlockedAPI(t *testing.T) {
+	profile := TargetProfile{ServiceURL: "https://target.test/web", APIURL: "https://target.test/api"}
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		response := testHTTPResponse(http.StatusOK, "")
+		response.Header.Set("CF-Ray", "test")
+		if req.URL.Path == "/web" {
+			response.Body = io.NopCloser(strings.NewReader("checking your browser"))
+			return response, nil
+		}
+		response.StatusCode = http.StatusForbidden
+		response.Body = io.NopCloser(strings.NewReader("denied"))
+		return response, nil
+	})}
+	result := probeTargetWithClient(context.Background(), client, profile)
+	if result.ServiceReachable || result.APIReachable == nil || *result.APIReachable {
+		t.Fatalf("Cloudflare challenge/blocked endpoints must be unreachable: %#v", result)
+	}
+	if result.CloudflareStatus == nil || *result.CloudflareStatus != "blocked" {
+		t.Fatalf("expected merged worst Cloudflare status blocked, got %#v", result.CloudflareStatus)
 	}
 }
 

@@ -111,6 +111,47 @@ func TestTargetSpecificCheckResults(t *testing.T) {
 	}
 }
 
+func TestCloudflareBlockedResultCannotEnterTargetPool(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "test", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, err := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("list proxy: items=%#v err=%v", items, err)
+	}
+	blocked := "blocked"
+	if err := st.SaveCheckResult(CheckResult{
+		ProxyID:          items[0].ID,
+		Status:           "available",
+		Grade:            "A",
+		TargetProfile:    "openai",
+		ServiceReachable: true,
+		APIReachable:     boolPtr(true),
+		CloudflareStatus: &blocked,
+		RecommendedUse:   "web_api",
+	}); err != nil {
+		t.Fatalf("save blocked result: %v", err)
+	}
+	var status string
+	if err := st.db.QueryRow("SELECT status FROM proxy_target_state WHERE proxy_id = ? AND target_profile = 'openai'", items[0].ID).Scan(&status); err != nil {
+		t.Fatalf("read target status: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("Cloudflare-blocked result entered target state as %q", status)
+	}
+	upstreams, err := st.GatewayUpstreamCandidates(availableProxyFilter{TargetProfile: "openai", Limit: 10})
+	if err != nil || len(upstreams) != 0 {
+		t.Fatalf("Cloudflare-blocked result entered gateway pool: upstreams=%#v err=%v", upstreams, err)
+	}
+}
+
 func TestStatsIncludesTargetAvailability(t *testing.T) {
 	st, err := openStore(":memory:")
 	if err != nil {
@@ -627,7 +668,7 @@ func TestStateModelSchemaVersionAndMigrationIdempotency(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 	version, err := st.SchemaVersion()
-	if err != nil || version != geoCacheMigrationVersion {
+	if err != nil || version != cloudflareTargetMigrationVersion {
 		t.Fatalf("unexpected schema version=%d err=%v", version, err)
 	}
 	if _, err := st.ImportProxies("http://1.2.3.4:8080", "legacy", "http"); err != nil {
@@ -685,6 +726,53 @@ SELECT status, capability FROM proxy_target_state WHERE proxy_id = ? AND target_
 	var integrity string
 	if err := st.db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
 		t.Fatalf("integrity check=%q err=%v", integrity, err)
+	}
+}
+
+func TestCloudflareTargetMigrationReclassifiesLegacyAvailability(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := st.ImportProxies("http://1.2.3.4:8080", "legacy", "http"); err != nil {
+		t.Fatalf("import proxy: %v", err)
+	}
+	items, _, _ := st.ListProxies(proxyFilter{Status: "all", Limit: 10})
+	proxyID := items[0].ID
+	if err := st.SaveCheckResult(CheckResult{ProxyID: proxyID, Status: "available", Grade: "A", TargetProfile: "openai", ServiceReachable: true, RecommendedUse: "web"}); err != nil {
+		t.Fatalf("save target: %v", err)
+	}
+	if _, err := st.db.Exec("UPDATE proxy_target_state SET status = 'available', grade = 'A', cloudflare_status = 'challenge', failure_reason = '', last_error = NULL WHERE proxy_id = ? AND target_profile = 'openai'", proxyID); err != nil {
+		t.Fatalf("prepare legacy target state: %v", err)
+	}
+	if _, err := st.db.Exec("UPDATE proxy_checks SET status = 'available', grade = 'A', cloudflare_status = 'challenge', last_error = NULL WHERE proxy_id = ? AND target_profile = 'openai'", proxyID); err != nil {
+		t.Fatalf("prepare legacy shadow state: %v", err)
+	}
+	if _, err := st.db.Exec("DELETE FROM schema_migrations WHERE version = ?", cloudflareTargetMigrationVersion); err != nil {
+		t.Fatalf("prepare legacy Cloudflare state: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("apply Cloudflare migration: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("repeat Cloudflare migration: %v", err)
+	}
+	var targetStatus, shadowStatus, reason string
+	if err := st.db.QueryRow("SELECT status, failure_reason FROM proxy_target_state WHERE proxy_id = ? AND target_profile = 'openai'", proxyID).Scan(&targetStatus, &reason); err != nil {
+		t.Fatalf("read target state: %v", err)
+	}
+	if err := st.db.QueryRow("SELECT status FROM proxy_checks WHERE proxy_id = ? AND target_profile = 'openai'", proxyID).Scan(&shadowStatus); err != nil {
+		t.Fatalf("read shadow state: %v", err)
+	}
+	if targetStatus != "failed" || shadowStatus != "failed" || reason != "cloudflare" {
+		t.Fatalf("legacy Cloudflare availability not reclassified: target=%q shadow=%q reason=%q", targetStatus, shadowStatus, reason)
+	}
+	var migrationCount int
+	if err := st.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", cloudflareTargetMigrationVersion).Scan(&migrationCount); err != nil || migrationCount != 1 {
+		t.Fatalf("migration is not idempotent: count=%d err=%v", migrationCount, err)
 	}
 }
 
@@ -921,7 +1009,7 @@ func TestExternalDatabaseMigrationChain(t *testing.T) {
 		t.Fatalf("repeat external migration: %v", err)
 	}
 	version, err := st.SchemaVersion()
-	if err != nil || version != geoCacheMigrationVersion {
+	if err != nil || version != cloudflareTargetMigrationVersion {
 		t.Fatalf("unexpected migrated schema version=%d err=%v", version, err)
 	}
 	var proxies, probes int
