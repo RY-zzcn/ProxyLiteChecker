@@ -1,7 +1,7 @@
 # ProxyLiteChecker v0.4.6 真实流量熔断与 Cloudflare 严格判定路线图
 
-- 状态：进行中
-- 当前工作包：`V046-VALIDATION-AND-RELEASE`
+- 状态：已完成并发布
+- 当前工作包：`COMPLETE`
 - 基线版本：`v0.4.5`
 - 目标版本：`v0.4.6`
 - 主题：让真实网关流量更快隔离失效上游，并阻止 Cloudflare challenge/blocked 代理进入对应目标池
@@ -51,8 +51,8 @@
 
 - [x] 定向测试、全量 test/vet/race、preflight、版本一致性、Node、交叉编译和差异检查通过。
 - [x] 更新并重启现有 8899，验证 health、登录/bootstrap、gateway status、HTTP/SOCKS5 切换与 Cloudflare 状态语义。
-- [ ] 更新 README、CHANGELOG、版本、接手文档并发布 `v0.4.6`。
-- [ ] 推送 main 和 annotated tag，确认 CI、Release、8 个资产、Docker 工作流和 GHCR amd64/arm64 成功。
+- [x] 更新 README、CHANGELOG、版本、接手文档并发布 `v0.4.6`。
+- [x] 推送 main 和 annotated tag，确认 CI、Release、8 个资产、Docker 工作流和 GHCR amd64/arm64 成功。
 
 ## 3. 实时断点
 
@@ -99,6 +99,19 @@
 - 正在执行或准备执行的命令：最终审计提交范围，创建并推送 v0.4.6 发布提交和 annotated tag，随后监控 CI、Release、8 个资产、Docker 与 GHCR 双架构。
 - 当前阻塞：无。
 - 唯一下一步：创建并推送 v0.4.6 发布提交。
+
+- v0.4.6 发布提交 `09c2527` 已推送 main；annotated `v0.4.6` tag 已指向 `09c25271bdd36427de5c01d3ce4c6f3d4e64d774` 并推送。
+- 当前工作包：`V046-GITHUB-RELEASE`。
+- 正在执行或准备执行的命令：轮询 GitHub Actions，核验 Release 8 个资产、Docker 工作流与 GHCR amd64/arm64 manifest。
+- 当前阻塞：无，等待远端工作流完成。
+- 唯一下一步：取得 CI、Release 与 Docker 全部成功终态。
+
+- 发布闭环：CI `29152531395`、Release `29152543400`、main Docker `29152531447`、tag Docker `29152543406` 全部成功。
+- Release：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.6>，8 个资产全部 uploaded。
+- GHCR：`ghcr.io/ry-zzcn/proxylitechecker:v0.4.6` 为 OCI multi-arch index，摘要 `sha256:a592bccd0f5c4f7a53e2d56e34c148e0a41eda0a00f3e81231a0c4d97e476b0e`，包含 `linux/amd64` 与 `linux/arm64`。
+- 当前工作包：`COMPLETE`。
+- 当前阻塞：无。
+- 唯一下一步：等待用户制定下一路线；不得自行开始未规划版本。
 
 - 真实运行数据备份：`backups/proxylite-data-20260711-195220.tar.gz` 已生成。
 - 当前工作包：`V046-MIGRATION-REVALIDATION`。

@@ -1,25 +1,26 @@
 # ProxyLiteChecker 项目接手与进度总览
 
-- 状态：`v0.4.6` 真实流量熔断与 Cloudflare 严格判定开发中
+- 状态：`v0.4.6` 真实流量熔断与 Cloudflare 严格判定已完成并发布
 - 当前代码版本：`v0.4.6`
-- 当前已发布版本：`v0.4.5`
-- 当前唯一开发阶段：`v0.4.6`
-- 下一开发版本：`v0.4.6`
+- 当前已发布版本：`v0.4.6`
+- 当前唯一开发阶段：无（`v0.4.6 / COMPLETE`）
+- 下一开发版本：用户尚未指定
 - 路线图终点：`v0.4.6`
 - 最后校准日期：2026-07-11
-- 已发布版本提交：`8dd89d3f50c53cff436070be993579a5b5e12308`（v0.4.5）
-- 当前工作区基线：`main` 发布提交 `8dd89d3` 加发布后完成记录；不得自行开始未规划版本
+- 已发布版本提交：`09c25271bdd36427de5c01d3ce4c6f3d4e64d774`（v0.4.6）
+- 当前工作区基线：`main` 发布提交 `09c2527` 加发布后完成记录；不得自行开始未规划版本
 
 本文是后续 Codex 会话的第一份项目状态入口。已完成的数据模型与性能路线见 [ROADMAP_V0.4.0_TO_V0.4.2.md](ROADMAP_V0.4.0_TO_V0.4.2.md)，部署路线见 [ROADMAP_V0.4.3.md](ROADMAP_V0.4.3.md)，已发布 UI 路线见 [ROADMAP_V0.4.4.md](ROADMAP_V0.4.4.md)，实时控制台路线见 [ROADMAP_V0.4.5.md](ROADMAP_V0.4.5.md)，当前开发路线见 [ROADMAP_V0.4.6.md](ROADMAP_V0.4.6.md)。
 
 ## 当前开发断点（v0.4.6）
 
-- 当前工作包：`V046-GITHUB-RELEASE`。
-- 最近完成：真实运行库已从 schema `402001` 迁移到 `406001`；历史 `available + Cloudflare blocked/challenge` 从 102 条归零，迁移记录仅 1 条且完整性为 `ok`。现有 8899 已运行 v0.4.6，登录/bootstrap、gateway status、Grok HTTP 18084 与 SOCKS5 18085 真实 HTTPS 冒烟通过。
+- 当前工作包：`COMPLETE`。
+- 最近完成：v0.4.6 发布提交 `09c2527`、main 与 annotated tag 已推送；CI `29152531395`、Release `29152543400`、main Docker `29152531447`、tag Docker `29152543406` 全部成功。
 - 已通过验证：preflight、全量 test/vet/race、版本一致性、Node、Windows amd64/Linux arm64 交叉编译、差异检查、迁移幂等与真实库升级、现有 8899 health/API/SQLite/HTTP/SOCKS5 验收。
-- 正在执行或准备执行的命令：最终审计提交范围，创建并推送 v0.4.6 发布提交和 annotated tag，随后监控 CI、Release、8 个资产、Docker 与 GHCR 双架构。
+- 发布：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.6>；8 个资产全部 uploaded；GHCR `v0.4.6` 摘要 `sha256:a592bccd0f5c4f7a53e2d56e34c148e0a41eda0a00f3e81231a0c4d97e476b0e`，包含 `linux/amd64` 与 `linux/arm64`。
+- 正在执行或准备执行的命令：无；等待用户制定下一路线。
 - 当前阻塞：无。
-- 唯一下一步：创建并推送 v0.4.6 发布提交。
+- 唯一下一步：等待用户制定下一路线；不得自行开始未规划版本。
 
 - 迁移补充：新增 schema `406001 / v0.4.6_cloudflare_target_strict`，事务内把历史 `proxy_target_state` 和 `proxy_checks` 中 `available + blocked/challenge` 重分类为 failed；新写入仍在保存层二次强制该不变量。
 - 真实库迁移前审计：schema `402001`，16,057 proxies，638 条 blocked/challenge 目标记录，其中 102 条仍为 available，`integrity_check=ok`。
