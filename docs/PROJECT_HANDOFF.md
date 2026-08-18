@@ -1,10 +1,10 @@
 # ProxyLiteChecker 项目接手与进度总览
 
-- 状态：`v0.4.7` 代理源维护与 Docker TLS 修复已完成，待发布
+- 状态：`v0.4.7` 代理源维护与 Docker TLS 修复已完成并发布
 - 当前代码版本：`v0.4.7`
-- 当前已发布版本：`v0.4.6`
-- 当前唯一开发阶段：`v0.4.7 / RELEASE PENDING`
-- 下一开发版本：待用户在 `v0.4.7` 发布后规划
+- 当前已发布版本：`v0.4.7`
+- 当前唯一开发阶段：`v0.4.7 / COMPLETE`
+- 下一开发版本：待用户规划
 - 路线图终点：`v0.4.7`
 - 最后校准日期：2026-08-19
 - 已发布版本提交：`09c25271bdd36427de5c01d3ce4c6f3d4e64d774`（v0.4.6）
@@ -14,13 +14,14 @@
 
 ## 当前开发断点（v0.4.7）
 
-- 当前工作包：`v0.4.7_release`。
+- 当前工作包：`v0.4.7 / COMPLETE`。
 - 最近完成：新增 schema `407001 / v0.4.7_proxy_sources`、动态源 CRUD/拉取/调度兼容、Web 源编辑器、启停和失败原因提示；Docker runtime 安装 `ca-certificates`；补充动态 JSON 源解析测试。
 - 已通过验证：preflight、全量 test/vet/race、版本一致性、Node 语法和差异检查；临时 SQLite 迁移到 `407001`；回环地址 health 返回 `0.4.7`；登录、33 个内置源、自定义源创建/更新/删除 `201/200/200` 和 GeoIP 状态 API 冒烟通过。
-- 上一已发布版本：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.6>；8 个资产全部 uploaded；GHCR `v0.4.6` 摘要 `sha256:a592bccd0f5c4f7a53e2d56e34c148e0a41eda0a00f3e81231a0c4d97e476b0e`，包含 `linux/amd64` 与 `linux/arm64`。
-- 正在执行或准备执行的命令：等待 CI `32168526273`、Release `32168607662`、main Docker `32168526272` 和 tag Docker `32168607889` 终态，随后核验 Release 资产与 GHCR manifest。
-- 当前阻塞：无；Deploy key 已验证，发布提交 `bbab7a3` 和 annotated `v0.4.7` tag 已推送。
-- 唯一下一步：取得四条 v0.4.7 工作流的最终终态。
+- 发布结果：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.7>；发布提交 `bbab7a3`；annotated tag `v0.4.7`；8 个资产全部 uploaded；GHCR `v0.4.7` 摘要 `sha256:f24b56b381a81e3cb212f71830f08e4976558e9e9eefcf8122f21c95f9db273a`，包含 `linux/amd64` 与 `linux/arm64`。
+- 已通过验证：CI `32168526273`、Release `32168607662`、main Docker `32168526272`、tag Docker `32168607889` 全部成功；preflight、全量 test/vet/race、迁移、API 冒烟和发布资产核验通过。
+- 正在执行或准备执行的命令：推送发布后文档记录并确认工作区干净。
+- 当前阻塞：无。
+- 唯一下一步：等待用户制定 v0.4.7 之后的新路线。
 
 - 迁移补充：新增 schema `406001 / v0.4.6_cloudflare_target_strict`，事务内把历史 `proxy_target_state` 和 `proxy_checks` 中 `available + blocked/challenge` 重分类为 failed；新写入仍在保存层二次强制该不变量。
 - 真实库迁移前审计：schema `402001`，16,057 proxies，638 条 blocked/challenge 目标记录，其中 102 条仍为 available，`integrity_check=ok`。
