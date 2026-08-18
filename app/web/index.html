@@ -48,7 +48,7 @@
           <div>
             <span class="brand-eyebrow">LOCAL PROXY OPS</span>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.4.6</span> · 额丶Y</small>
+            <small><span id="versionText">v0.4.7</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -202,6 +202,7 @@
               <p id="selectedSourcesText">已选 0 个</p>
             </div>
             <div class="inline-actions">
+              <button id="addSourceBtn" class="secondary" data-label="新增代理源">新增代理源</button>
               <button id="selectAllSources" class="secondary" data-label="全选">全选</button>
               <button id="clearSources" class="secondary" data-label="清空">清空</button>
               <label class="compact-label">
@@ -578,6 +579,31 @@
     </main>
 
     <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <dialog id="sourceEditorDialog" class="source-editor-dialog">
+      <form id="sourceEditorForm" method="dialog">
+        <div class="dialog-head">
+          <div>
+            <span class="section-eyebrow">SOURCE CATALOG</span>
+            <h2 id="sourceEditorTitle">新增代理源</h2>
+          </div>
+          <button id="closeSourceEditorBtn" class="ghost" type="button" aria-label="关闭">关闭</button>
+        </div>
+        <input id="sourceEditorId" type="hidden" />
+        <div class="source-editor-grid">
+          <label>名称<input id="sourceEditorName" required maxlength="120" /></label>
+          <label>代理源 ID<input id="sourceEditorIdText" maxlength="80" pattern="[a-z0-9_.-]+" placeholder="留空自动生成" /></label>
+          <label class="source-editor-wide">URL<input id="sourceEditorUrl" type="url" required /></label>
+          <label>默认协议<select id="sourceEditorProtocol"><option value="auto">自动</option><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks4">SOCKS4</option><option value="socks5">SOCKS5</option><option value="socks5h">SOCKS5H</option></select></label>
+          <label>解析器<select id="sourceEditorParser"><option value="plain">纯文本</option><option value="json">JSON</option><option value="html">HTML</option></select></label>
+          <label class="source-enabled-editor"><input id="sourceEditorEnabled" type="checkbox" checked />启用此代理源</label>
+        </div>
+        <p id="sourceEditorError" class="error-text" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="cancelSourceEditorBtn" class="secondary" type="button">取消</button>
+          <button id="saveSourceBtn" type="submit">保存代理源</button>
+        </div>
+      </form>
+    </dialog>
     <script src="/static/app.js"></script>
   </body>
 </html>

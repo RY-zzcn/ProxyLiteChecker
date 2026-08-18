@@ -668,7 +668,7 @@ func TestStateModelSchemaVersionAndMigrationIdempotency(t *testing.T) {
 		t.Fatalf("ensure schema: %v", err)
 	}
 	version, err := st.SchemaVersion()
-	if err != nil || version != cloudflareTargetMigrationVersion {
+	if err != nil || version != sourceCatalogMigrationVersion {
 		t.Fatalf("unexpected schema version=%d err=%v", version, err)
 	}
 	if _, err := st.ImportProxies("http://1.2.3.4:8080", "legacy", "http"); err != nil {
@@ -1009,7 +1009,7 @@ func TestExternalDatabaseMigrationChain(t *testing.T) {
 		t.Fatalf("repeat external migration: %v", err)
 	}
 	version, err := st.SchemaVersion()
-	if err != nil || version != cloudflareTargetMigrationVersion {
+	if err != nil || version != sourceCatalogMigrationVersion {
 		t.Fatalf("unexpected migrated schema version=%d err=%v", version, err)
 	}
 	var proxies, probes int

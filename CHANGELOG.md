@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.4.7 - 2026-08-19
+
+- Add a persistent proxy-source catalog with editable built-in URLs, custom source CRUD, enable/disable controls, and source-specific error visibility.
+- Install CA certificates in the Docker runtime image so proxy-source and GeoIP HTTPS downloads can validate TLS certificates.
+
 ## 0.4.6 - 2026-07-11
 
 - Detect Cloudflare status on both target Web and API probes, merge the most severe result, and reject `challenge` or `blocked` responses even when their HTTP status would otherwise be accepted.

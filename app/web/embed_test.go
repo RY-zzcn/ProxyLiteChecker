@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-func TestEmbeddedConsoleIncludesV046GatewayReliability(t *testing.T) {
+func TestEmbeddedConsoleIncludesV047SourceCatalog(t *testing.T) {
 	t.Parallel()
 	checks := map[string][]string{
 		"index.html": {
 			`id="themeToggle"`,
 			`class="workspace-nav"`,
 			`<details class="settings-group`,
-			`id="versionText">v0.4.6`,
+			`id="versionText">v0.4.7`,
 			`id="runtimeLogs"`,
 			`name="automation-settings"`,
 		},
@@ -27,6 +27,7 @@ func TestEmbeddedConsoleIncludesV046GatewayReliability(t *testing.T) {
 			"setupSectionNavigation()",
 			"loadRuntime()",
 			`data-label="代理"`,
+			"openSourceEditor",
 		},
 	}
 	for name, needles := range checks {

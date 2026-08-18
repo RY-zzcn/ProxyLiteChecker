@@ -13,6 +13,7 @@ bash -n scripts/install_systemd.sh
 bash -n scripts/install.sh
 bash scripts/install.sh --help >/dev/null
 scripts/check_version_consistency.sh
+grep -q 'ca-certificates' Dockerfile
 go test ./...
 go build -o bin/proxylite ./cmd/proxylite
 git diff --check

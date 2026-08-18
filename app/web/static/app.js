@@ -507,18 +507,33 @@ function renderSources() {
       (source) => {
         const health = source.health || source;
         const status = sourceHealthLabel(health);
+        const error = String(health.last_error || "").trim();
         return `
-        <label class="source-item" title="${escapeHtml(source.url)}">
-          <input type="checkbox" class="source-check" value="${escapeHtml(source.id)}" ${useAll || selectedIDs.has(source.id) ? "checked" : ""} />
-          <span>${escapeHtml(source.name)}</span>
-          <small>${escapeHtml(status)}</small>
-        </label>
+        <div class="source-item${source.enabled ? "" : " disabled"}" title="${escapeHtml(source.url)}">
+          <label class="source-select">
+            <input type="checkbox" class="source-check" value="${escapeHtml(source.id)}" ${source.enabled && (useAll || selectedIDs.has(source.id)) ? "checked" : ""} ${source.enabled ? "" : "disabled"} />
+            <span>${escapeHtml(source.name)}</span>
+          </label>
+          <small title="${escapeHtml(error || status)}">${escapeHtml(source.enabled ? status : "已停用")}</small>
+          <label class="source-enabled" title="启用或停用此代理源"><input type="checkbox" data-source-enabled="${escapeHtml(source.id)}" ${source.enabled ? "checked" : ""} /><span>启用</span></label>
+          <button type="button" class="source-tool secondary" data-source-edit="${escapeHtml(source.id)}">编辑</button>
+          <button type="button" class="source-tool danger secondary" data-source-delete="${escapeHtml(source.id)}">删除</button>
+        </div>
       `;
       },
     )
     .join("");
   document.querySelectorAll(".source-check").forEach((input) => {
     input.addEventListener("change", updateSelectedSources);
+  });
+  document.querySelectorAll("[data-source-edit]").forEach((button) => {
+    button.addEventListener("click", () => openSourceEditor(state.sources.find((item) => item.id === button.dataset.sourceEdit)));
+  });
+  document.querySelectorAll("[data-source-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteSource(button.dataset.sourceDelete));
+  });
+  document.querySelectorAll("[data-source-enabled]").forEach((input) => {
+    input.addEventListener("change", () => setSourceEnabled(input.dataset.sourceEnabled, input.checked));
   });
   updateSelectedSources();
 }
@@ -530,6 +545,80 @@ function sourceHealthLabel(health) {
   }
   const disabled = health.disabled_until ? ` 冷却至 ${displayTimestamp(health.disabled_until, "")}` : "";
   return `失败 ${Number(health.failure_streak || 0)}${disabled}`;
+}
+
+function openSourceEditor(source = null) {
+  const editing = Boolean(source);
+  el("sourceEditorTitle").textContent = editing ? "编辑代理源" : "新增代理源";
+  el("sourceEditorId").value = source?.id || "";
+  el("sourceEditorIdText").value = source?.id || "";
+  el("sourceEditorIdText").disabled = editing;
+  el("sourceEditorName").value = source?.name || "";
+  el("sourceEditorUrl").value = source?.url || "";
+  el("sourceEditorProtocol").value = source?.default_protocol || "auto";
+  el("sourceEditorParser").value = source?.parser || "plain";
+  el("sourceEditorEnabled").checked = source?.enabled !== false;
+  el("sourceEditorError").textContent = "";
+  el("sourceEditorDialog").showModal();
+  el("sourceEditorName").focus();
+}
+
+function closeSourceEditor() {
+  el("sourceEditorDialog").close();
+}
+
+async function saveSource(event) {
+  event.preventDefault();
+  const existingId = el("sourceEditorId").value.trim();
+  const sourceId = existingId || el("sourceEditorIdText").value.trim();
+  const payload = {
+    id: sourceId,
+    name: el("sourceEditorName").value.trim(),
+    url: el("sourceEditorUrl").value.trim(),
+    default_protocol: el("sourceEditorProtocol").value,
+    parser: el("sourceEditorParser").value,
+    enabled: el("sourceEditorEnabled").checked,
+  };
+  el("sourceEditorError").textContent = "";
+  try {
+    await withButton(el("saveSourceBtn"), "保存中", async () => {
+      await api(existingId ? `/api/sources/${encodeURIComponent(existingId)}` : "/api/sources", {
+        method: existingId ? "PATCH" : "POST",
+        body: JSON.stringify(payload),
+      });
+    });
+    closeSourceEditor();
+    await loadSources();
+    toast(existingId ? "代理源已更新" : "代理源已新增", "success");
+  } catch (error) {
+    el("sourceEditorError").textContent = error.message;
+  }
+}
+
+async function setSourceEnabled(sourceId, enabled) {
+  try {
+    await api(`/api/sources/${encodeURIComponent(sourceId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+    await loadSources();
+    toast(enabled ? "代理源已启用" : "代理源已停用", "success");
+  } catch (error) {
+    toast(error.message, "error");
+    await loadSources();
+  }
+}
+
+async function deleteSource(sourceId) {
+  const source = state.sources.find((item) => item.id === sourceId);
+  if (!source || !window.confirm(`确定删除代理源“${source.name}”？`)) return;
+  try {
+    await api(`/api/sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" });
+    await loadSources();
+    toast("代理源已删除", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function renderSettings(settings, scheduler) {
@@ -1276,7 +1365,8 @@ async function resumeVisiblePolling() {
 
 async function saveSettings(event) {
   const selectedSourceIDs = [...document.querySelectorAll(".source-check:checked")].map((input) => input.value);
-  const allSourcesSelected = selectedSourceIDs.length === state.sources.length;
+  const enabledSourceCount = state.sources.filter((source) => source.enabled !== false).length;
+  const allSourcesSelected = selectedSourceIDs.length === enabledSourceCount;
   const checkTimeout = Number(el("settingsCheckTimeout").value || 6);
   const hardTimeout = Number(el("settingsCheckHardTimeout").value || checkTimeout * 10);
   const checkTargets = getTargetSelections("settingsCheckTargets");
@@ -1443,6 +1533,10 @@ function bindEvents() {
   });
   el("refreshBtn").addEventListener("click", (event) => withButton(event.currentTarget, "刷新中", refreshAll));
   el("fetchSourcesBtn").addEventListener("click", fetchSources);
+  el("addSourceBtn").addEventListener("click", () => openSourceEditor());
+  el("sourceEditorForm").addEventListener("submit", saveSource);
+  el("closeSourceEditorBtn").addEventListener("click", closeSourceEditor);
+  el("cancelSourceEditorBtn").addEventListener("click", closeSourceEditor);
   el("selectAllSources").addEventListener("click", () => {
     document.querySelectorAll(".source-check").forEach((item) => {
       item.checked = true;

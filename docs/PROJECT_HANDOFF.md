@@ -1,26 +1,26 @@
 # ProxyLiteChecker 项目接手与进度总览
 
-- 状态：`v0.4.6` 真实流量熔断与 Cloudflare 严格判定已完成并发布
-- 当前代码版本：`v0.4.6`
+- 状态：`v0.4.7` 代理源维护与 Docker TLS 修复已完成，待发布
+- 当前代码版本：`v0.4.7`
 - 当前已发布版本：`v0.4.6`
-- 当前唯一开发阶段：无（`v0.4.6 / COMPLETE`）
-- 下一开发版本：用户尚未指定
-- 路线图终点：`v0.4.6`
-- 最后校准日期：2026-07-11
+- 当前唯一开发阶段：`v0.4.7 / RELEASE PENDING`
+- 下一开发版本：待用户在 `v0.4.7` 发布后规划
+- 路线图终点：`v0.4.7`
+- 最后校准日期：2026-08-19
 - 已发布版本提交：`09c25271bdd36427de5c01d3ce4c6f3d4e64d774`（v0.4.6）
 - 当前工作区基线：`main` 发布提交 `09c2527` 加发布后完成记录；不得自行开始未规划版本
 
-本文是后续 Codex 会话的第一份项目状态入口。已完成的数据模型与性能路线见 [ROADMAP_V0.4.0_TO_V0.4.2.md](ROADMAP_V0.4.0_TO_V0.4.2.md)，部署路线见 [ROADMAP_V0.4.3.md](ROADMAP_V0.4.3.md)，已发布 UI 路线见 [ROADMAP_V0.4.4.md](ROADMAP_V0.4.4.md)，实时控制台路线见 [ROADMAP_V0.4.5.md](ROADMAP_V0.4.5.md)，当前开发路线见 [ROADMAP_V0.4.6.md](ROADMAP_V0.4.6.md)。
+本文是后续 Codex 会话的第一份项目状态入口。已完成的数据模型与性能路线见 [ROADMAP_V0.4.0_TO_V0.4.2.md](ROADMAP_V0.4.0_TO_V0.4.2.md)，部署路线见 [ROADMAP_V0.4.3.md](ROADMAP_V0.4.3.md)，已发布 UI 路线见 [ROADMAP_V0.4.4.md](ROADMAP_V0.4.4.md)，实时控制台路线见 [ROADMAP_V0.4.5.md](ROADMAP_V0.4.5.md)，当前开发路线见 [ROADMAP_V0.4.7.md](ROADMAP_V0.4.7.md)。
 
-## 当前开发断点（v0.4.6）
+## 当前开发断点（v0.4.7）
 
-- 当前工作包：`COMPLETE`。
-- 最近完成：v0.4.6 发布提交 `09c2527`、main 与 annotated tag 已推送；CI `29152531395`、Release `29152543400`、main Docker `29152531447`、tag Docker `29152543406` 全部成功。
-- 已通过验证：preflight、全量 test/vet/race、版本一致性、Node、Windows amd64/Linux arm64 交叉编译、差异检查、迁移幂等与真实库升级、现有 8899 health/API/SQLite/HTTP/SOCKS5 验收。
-- 发布：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.6>；8 个资产全部 uploaded；GHCR `v0.4.6` 摘要 `sha256:a592bccd0f5c4f7a53e2d56e34c148e0a41eda0a00f3e81231a0c4d97e476b0e`，包含 `linux/amd64` 与 `linux/arm64`。
-- 正在执行或准备执行的命令：无；等待用户制定下一路线。
-- 当前阻塞：无。
-- 唯一下一步：等待用户制定下一路线；不得自行开始未规划版本。
+- 当前工作包：`v0.4.7_release`。
+- 最近完成：新增 schema `407001 / v0.4.7_proxy_sources`、动态源 CRUD/拉取/调度兼容、Web 源编辑器、启停和失败原因提示；Docker runtime 安装 `ca-certificates`；补充动态 JSON 源解析测试。
+- 已通过验证：preflight、全量 test/vet/race、版本一致性、Node 语法和差异检查；临时 SQLite 迁移到 `407001`；回环地址 health 返回 `0.4.7`；登录、33 个内置源、自定义源创建/更新/删除 `201/200/200` 和 GeoIP 状态 API 冒烟通过。
+- 上一已发布版本：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.6>；8 个资产全部 uploaded；GHCR `v0.4.6` 摘要 `sha256:a592bccd0f5c4f7a53e2d56e34c148e0a41eda0a00f3e81231a0c4d97e476b0e`，包含 `linux/amd64` 与 `linux/arm64`。
+- 正在执行或准备执行的命令：审计提交范围，创建发布提交并推送 main；随后推送 annotated `v0.4.7` tag，监控 CI、Release 和 Docker 工作流并核验发布资产。
+- 当前阻塞：无；Deploy key 已验证可访问仓库。
+- 唯一下一步：创建并推送 v0.4.7 发布提交。
 
 - 迁移补充：新增 schema `406001 / v0.4.6_cloudflare_target_strict`，事务内把历史 `proxy_target_state` 和 `proxy_checks` 中 `available + blocked/challenge` 重分类为 failed；新写入仍在保存层二次强制该不变量。
 - 真实库迁移前审计：schema `402001`，16,057 proxies，638 条 blocked/challenge 目标记录，其中 102 条仍为 available，`integrity_check=ok`。
@@ -213,9 +213,10 @@ v0.4.3 的一键部署、v0.4.4 的响应式浅/深色控制台，以及 v0.4.5 
 | `v0.4.3` | 已发布 | 一键部署 | 二进制/Docker 交互安装、Docker 环境处理、`/opt` 规范目录和简化文档 |
 | `v0.4.4` | 已发布 | 前端 UI | 设计系统、深色主题、信息架构、响应式数据视图和无障碍 |
 | `v0.4.5` | 已发布 | 实时控制台 | 精确导航、秒级刷新、30 条中文日志、多目标进度和 1–300 热并发 |
-| `v0.4.6` | 进行中 | 网关真实流量可靠性 | Cloudflare 严格目标资格、实时响应熔断与 CONNECT/SOCKS5 隧道反馈 |
+| `v0.4.6` | 已发布 | 网关真实流量可靠性 | Cloudflare 严格目标资格、实时响应熔断与 CONNECT/SOCKS5 隧道反馈 |
+| `v0.4.7` | 待发布 | 代理源维护与运行环境 TLS | 持久化可编辑源目录、自定义源 CRUD、源状态可视化和 Docker CA 根证书 |
 
-详细工作包、表结构、API、测试和验收标准见 [ROADMAP_V0.4.0_TO_V0.4.2.md](ROADMAP_V0.4.0_TO_V0.4.2.md)。
+当前工作包、测试和发布验收标准见 [ROADMAP_V0.4.7.md](ROADMAP_V0.4.7.md)。历史数据模型与性能路线见 [ROADMAP_V0.4.0_TO_V0.4.2.md](ROADMAP_V0.4.0_TO_V0.4.2.md)。
 
 ## 10. 后续 Codex 会话标准流程
 

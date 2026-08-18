@@ -2,14 +2,23 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 )
+
+func sourceEnabledInt(enabled bool) int {
+	if enabled {
+		return 1
+	}
+	return 0
+}
 
 type sourceOption struct {
 	ID              string `json:"id"`
@@ -18,6 +27,7 @@ type sourceOption struct {
 	DefaultProtocol string `json:"default_protocol"`
 	Parser          string `json:"parser"`
 	Enabled         bool   `json:"enabled"`
+	Builtin         bool   `json:"builtin"`
 }
 
 func builtinSources() []sourceOption {
@@ -57,15 +67,170 @@ func builtinSources() []sourceOption {
 		{ID: "checkerproxy_archive", Name: "CheckerProxy Archive", URL: "https://checkerproxy.net/api/archive/2026-07-03", DefaultProtocol: "auto", Parser: "plain", Enabled: true},
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	for i := range items {
+		items[i].Builtin = true
+	}
 	return items
 }
 
-func sourceMap() map[string]sourceOption {
-	items := map[string]sourceOption{}
-	for _, source := range builtinSources() {
-		items[source.ID] = source
+func normalizeSourceID(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
 	}
-	return items
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+			continue
+		}
+		return ""
+	}
+	if len(value) > 80 {
+		return ""
+	}
+	return value
+}
+
+func validateSourceOption(source sourceOption) error {
+	source.ID = normalizeSourceID(source.ID)
+	if source.ID == "" {
+		return fmt.Errorf("代理源 ID 只能包含字母、数字、下划线、短横线和点")
+	}
+	if strings.TrimSpace(source.Name) == "" || len([]rune(source.Name)) > 120 {
+		return fmt.Errorf("代理源名称不能为空且不能超过 120 个字符")
+	}
+	parsed, err := url.Parse(strings.TrimSpace(source.URL))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("代理源 URL 必须是 http 或 https 地址")
+	}
+	source.DefaultProtocol = normalizeProtocol(source.DefaultProtocol)
+	if source.DefaultProtocol == "" {
+		return fmt.Errorf("不支持的默认协议")
+	}
+	source.Parser = strings.ToLower(strings.TrimSpace(source.Parser))
+	switch source.Parser {
+	case "plain", "json", "html":
+	default:
+		return fmt.Errorf("不支持的解析器")
+	}
+	return nil
+}
+
+func (s *store) ListSources() ([]sourceOption, error) {
+	rows, err := s.db.Query(`
+SELECT id, name, url, default_protocol, parser, enabled, builtin
+FROM proxy_sources
+ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []sourceOption{}
+	for rows.Next() {
+		var item sourceOption
+		var enabled, builtin int
+		if err := rows.Scan(&item.ID, &item.Name, &item.URL, &item.DefaultProtocol, &item.Parser, &enabled, &builtin); err != nil {
+			return nil, err
+		}
+		item.Enabled = enabled != 0
+		item.Builtin = builtin != 0
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *store) CreateSource(source sourceOption) error {
+	source.ID = normalizeSourceID(source.ID)
+	source.DefaultProtocol = normalizeProtocol(source.DefaultProtocol)
+	source.Parser = strings.ToLower(strings.TrimSpace(source.Parser))
+	if err := validateSourceOption(source); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`
+INSERT INTO proxy_sources (id, name, url, default_protocol, parser, enabled, builtin, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now', '+8 hours'), datetime('now', '+8 hours'))`,
+		source.ID, strings.TrimSpace(source.Name), strings.TrimSpace(source.URL), source.DefaultProtocol, source.Parser, sourceEnabledInt(source.Enabled))
+	return err
+}
+
+func (s *store) UpdateSource(source sourceOption) error {
+	source.ID = normalizeSourceID(source.ID)
+	source.DefaultProtocol = normalizeProtocol(source.DefaultProtocol)
+	source.Parser = strings.ToLower(strings.TrimSpace(source.Parser))
+	if err := validateSourceOption(source); err != nil {
+		return err
+	}
+	result, err := s.db.Exec(`
+UPDATE proxy_sources
+SET name = ?, url = ?, default_protocol = ?, parser = ?, enabled = ?, updated_at = datetime('now', '+8 hours')
+	WHERE id = ?`, strings.TrimSpace(source.Name), strings.TrimSpace(source.URL), source.DefaultProtocol, source.Parser, sourceEnabledInt(source.Enabled), source.ID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *store) DeleteSource(sourceID string) error {
+	sourceID = normalizeSourceID(sourceID)
+	if sourceID == "" {
+		return fmt.Errorf("无效的代理源 ID")
+	}
+	result, err := s.db.Exec("DELETE FROM proxy_sources WHERE id = ?", sourceID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *server) availableSources() []sourceOption {
+	items, err := s.store.ListSources()
+	if err == nil {
+		return items
+	}
+	return builtinSources()
+}
+
+func (s *server) selectedSources(sourceIDs []string) []sourceOption {
+	items := s.availableSources()
+	byID := make(map[string]sourceOption, len(items))
+	for _, source := range items {
+		byID[source.ID] = source
+	}
+	if len(sourceIDs) == 0 {
+		out := make([]sourceOption, 0, len(items))
+		for _, source := range items {
+			if source.Enabled {
+				out = append(out, source)
+			}
+		}
+		return out
+	}
+	out := []sourceOption{}
+	seen := map[string]bool{}
+	for _, id := range sourceIDs {
+		id = normalizeSourceID(id)
+		if id == "all" {
+			return s.selectedSources(nil)
+		}
+		if source, ok := byID[id]; ok && source.Enabled && !seen[id] {
+			seen[id] = true
+			out = append(out, source)
+		}
+	}
+	return out
 }
 
 func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, error) {
@@ -112,7 +277,7 @@ func (s *server) StartFetchSourcesJob(payload map[string]any) (map[string]any, e
 		return nil, fmt.Errorf("创建拉取任务失败")
 	}
 	if s.runtime != nil {
-		s.runtime.Add("info", fmt.Sprintf("拉取任务 #%s 已启动：选择 %d 个代理源，单源上限 %d", job.ID, len(selectedSources(sourceIDs)), limitPerSource))
+		s.runtime.Add("info", fmt.Sprintf("拉取任务 #%s 已启动：选择 %d 个代理源，单源上限 %d", job.ID, len(s.selectedSources(sourceIDs)), limitPerSource))
 	}
 	if s.coordinator != nil {
 		s.coordinator.Bind(job)
@@ -130,7 +295,7 @@ func (s *server) runFetchSourcesJob(ctx context.Context, jobID string, sourceIDs
 			s.jobs.fail(jobID, fmt.Errorf("拉取任务异常退出：%v", recovered))
 		}
 	}()
-	sources := selectedSources(sourceIDs)
+	sources := s.selectedSources(sourceIDs)
 	total := len(sources)
 	s.jobs.Update(jobID, map[string]any{"total": total, "message": fmt.Sprintf("开始拉取 %d 个代理源", total)})
 	added := 0
@@ -222,30 +387,6 @@ func (s *server) finalizeFetchJob(jobID string, total int, added int, updated in
 		return
 	}
 	s.jobs.complete(jobID, fmt.Sprintf("拉取完成：新增 %d，更新 %d，失败源 %d", added, updated, failed), result)
-}
-
-func selectedSources(sourceIDs []string) []sourceOption {
-	all := sourceMap()
-	if len(sourceIDs) == 0 {
-		out := builtinSources()
-		return out
-	}
-	out := []sourceOption{}
-	seen := map[string]bool{}
-	for _, id := range sourceIDs {
-		id = strings.TrimSpace(id)
-		if id == "all" {
-			return builtinSources()
-		}
-		if source, ok := all[id]; ok && !seen[id] {
-			seen[id] = true
-			out = append(out, source)
-		}
-	}
-	if len(out) == 0 {
-		return builtinSources()
-	}
-	return out
 }
 
 func fetchSource(ctx context.Context, source sourceOption, limit int) (string, int, error) {

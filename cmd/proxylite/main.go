@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	appVersion           = "0.4.6"
+	appVersion           = "0.4.7"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -274,6 +275,9 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /api/stats", s.withAuth(s.handleStats))
 	s.mux.HandleFunc("GET /api/runtime", s.withAuth(s.handleRuntime))
 	s.mux.HandleFunc("GET /api/sources", s.withAuth(s.handleSources))
+	s.mux.HandleFunc("POST /api/sources", s.withAuth(s.handleCreateSource))
+	s.mux.HandleFunc("PATCH /api/sources/{source_id}", s.withAuth(s.handleUpdateSource))
+	s.mux.HandleFunc("DELETE /api/sources/{source_id}", s.withAuth(s.handleDeleteSource))
 	s.mux.HandleFunc("GET /api/target-profiles", s.withAuth(s.handleTargetProfiles))
 	s.mux.HandleFunc("POST /api/sources/fetch-job", s.withAuth(s.handleFetchSourcesJob))
 	s.mux.HandleFunc("GET /api/proxies", s.withAuth(s.handleProxies))
@@ -492,7 +496,7 @@ func (s *server) sourcesPayload() []map[string]any {
 	if err != nil {
 		health = map[string]map[string]any{}
 	}
-	sources := builtinSources()
+	sources := s.availableSources()
 	out := make([]map[string]any, 0, len(sources))
 	for _, source := range sources {
 		item := map[string]any{
@@ -502,6 +506,7 @@ func (s *server) sourcesPayload() []map[string]any {
 			"default_protocol": source.DefaultProtocol,
 			"parser":           source.Parser,
 			"enabled":          source.Enabled,
+			"builtin":          source.Builtin,
 		}
 		if h, ok := health[source.ID]; ok {
 			item["health"] = h
@@ -512,6 +517,110 @@ func (s *server) sourcesPayload() []map[string]any {
 		out = append(out, item)
 	}
 	return out
+}
+
+func sourceFromPayload(payload map[string]any, fallback sourceOption) sourceOption {
+	return sourceOption{
+		ID:              firstNonEmpty(optionalString(payload["id"], ""), fallback.ID),
+		Name:            firstNonEmpty(optionalString(payload["name"], ""), fallback.Name),
+		URL:             firstNonEmpty(optionalString(payload["url"], ""), fallback.URL),
+		DefaultProtocol: firstNonEmpty(optionalString(payload["default_protocol"], ""), fallback.DefaultProtocol, "auto"),
+		Parser:          firstNonEmpty(optionalString(payload["parser"], ""), fallback.Parser, "plain"),
+		Enabled:         parseBool(payload["enabled"], fallback.Enabled),
+		Builtin:         fallback.Builtin,
+	}
+}
+
+func (s *server) sourceByID(id string) (sourceOption, bool) {
+	id = normalizeSourceID(id)
+	for _, source := range s.availableSources() {
+		if source.ID == id {
+			return source, true
+		}
+	}
+	return sourceOption{}, false
+}
+
+func (s *server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]any
+	if err := readJSON(r, &payload); err != nil {
+		errorResponse(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	rawID := optionalString(payload["id"], "")
+	id := normalizeSourceID(rawID)
+	if rawID != "" && id == "" {
+		errorResponse(w, http.StatusBadRequest, "代理源 ID 只能包含字母、数字、下划线、短横线和点")
+		return
+	}
+	if id == "" {
+		id = "custom_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	source := sourceFromPayload(payload, sourceOption{ID: id, Enabled: true})
+	source.ID = id
+	if err := s.store.CreateSource(source); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			errorResponse(w, http.StatusConflict, "代理源 ID 已存在")
+			return
+		}
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusCreated, map[string]any{"item": source})
+}
+
+func (s *server) handleUpdateSource(w http.ResponseWriter, r *http.Request) {
+	id := normalizeSourceID(r.PathValue("source_id"))
+	existing, ok := s.sourceByID(id)
+	if !ok {
+		errorResponse(w, http.StatusNotFound, "代理源不存在")
+		return
+	}
+	var payload map[string]any
+	if err := readJSON(r, &payload); err != nil {
+		errorResponse(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	source := sourceFromPayload(payload, existing)
+	source.ID = id
+	if err := s.store.UpdateSource(source); err != nil {
+		if err == sql.ErrNoRows {
+			errorResponse(w, http.StatusNotFound, "代理源不存在")
+			return
+		}
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"item": source})
+}
+
+func (s *server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
+	id := normalizeSourceID(r.PathValue("source_id"))
+	if err := s.store.DeleteSource(id); err != nil {
+		if err == sql.ErrNoRows {
+			errorResponse(w, http.StatusNotFound, "代理源不存在")
+			return
+		}
+		errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	settings, err := s.store.AppSettings()
+	if err == nil {
+		hadExplicitSources := len(settings.AutoFetchSourceIDs) > 0
+		filtered := settings.AutoFetchSourceIDs[:0]
+		for _, sourceID := range settings.AutoFetchSourceIDs {
+			if sourceID != id {
+				filtered = append(filtered, sourceID)
+			}
+		}
+		settings.AutoFetchSourceIDs = filtered
+		if len(filtered) == 0 && hadExplicitSources {
+			settings.AutoFetchEnabled = false
+			settings.AutoFetchLowStockEnabled = false
+		}
+		_, _ = s.store.SaveAppSettings(settings)
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"deleted": id})
 }
 
 func (s *server) handleFetchSourcesJob(w http.ResponseWriter, r *http.Request) {

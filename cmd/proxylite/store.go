@@ -127,6 +127,7 @@ const stateModelMigrationVersion = 400001
 const taskSchedulerMigrationVersion = 401001
 const geoCacheMigrationVersion = 402001
 const cloudflareTargetMigrationVersion = 406001
+const sourceCatalogMigrationVersion = 407001
 
 type parsedProxy struct {
 	Host     string
@@ -433,6 +434,9 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	if err := s.applyCloudflareTargetMigrationIfNeeded(); err != nil {
 		return err
 	}
+	if err := s.applySourceCatalogMigrationIfNeeded(); err != nil {
+		return err
+	}
 	if err := s.ensurePerformanceIndexes(); err != nil {
 		return err
 	}
@@ -441,6 +445,60 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		return err
 	}
 	log.Printf("database schema version: %d", version)
+	return nil
+}
+
+func (s *store) applySourceCatalogMigrationIfNeeded() error {
+	var applied int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", sourceCatalogMigrationVersion).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.Exec(`
+CREATE TABLE proxy_sources (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  default_protocol TEXT NOT NULL DEFAULT 'auto',
+  parser TEXT NOT NULL DEFAULT 'plain',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  builtin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
+);
+CREATE INDEX idx_proxy_sources_enabled ON proxy_sources(enabled);
+`); err != nil {
+		return err
+	}
+	for _, source := range builtinSources() {
+		if _, err := tx.Exec(`
+INSERT INTO proxy_sources (id, name, url, default_protocol, parser, enabled, builtin)
+VALUES (?, ?, ?, ?, ?, 1, 1)`, source.ID, source.Name, source.URL, source.DefaultProtocol, source.Parser); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`
+INSERT INTO schema_migrations (version, name, applied_at, app_version)
+VALUES (?, 'v0.4.7_proxy_sources', datetime('now', '+8 hours'), ?)`, sourceCatalogMigrationVersion, appVersion); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	log.Printf("database migration applied: version=%d name=v0.4.7_proxy_sources", sourceCatalogMigrationVersion)
 	return nil
 }
 

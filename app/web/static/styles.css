@@ -707,7 +707,7 @@ textarea {
 
 .source-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   max-height: 168px;
   overflow: auto;
@@ -733,12 +733,140 @@ textarea {
 }
 
 .source-item:hover,
-.source-item:has(input:checked) {
+.source-item:has(.source-check:checked) {
   border-color: var(--line-strong);
   background: #fff;
 }
 
-.source-item:has(input:checked) {
+.source-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 210px;
+}
+
+.source-select span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-item.disabled {
+  opacity: 0.62;
+}
+
+.source-enabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.source-enabled input {
+  width: 14px;
+  min-width: 14px;
+  min-height: 14px;
+}
+
+.source-tool {
+  min-height: 30px;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.source-editor-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-width: 680px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgb(15 23 42 / 24%);
+}
+
+.source-editor-dialog::backdrop {
+  background: rgb(15 23 42 / 42%);
+}
+
+.source-editor-dialog form {
+  padding: 20px;
+}
+
+.dialog-head,
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-head h2 {
+  margin: 2px 0 0;
+}
+
+.source-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.source-editor-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.source-editor-grid .source-editor-wide {
+  grid-column: 1 / -1;
+}
+
+.source-enabled-editor {
+  display: flex !important;
+  align-items: center;
+  align-self: end;
+  min-height: 40px;
+}
+
+.source-enabled-editor input {
+  width: 16px;
+  min-height: 16px;
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+@media (max-width: 620px) {
+  .source-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .source-editor-grid .source-editor-wide {
+    grid-column: auto;
+  }
+
+  .source-item {
+    flex-wrap: wrap;
+  }
+
+  .source-item small {
+    order: 4;
+    flex: 1 1 100%;
+    max-width: none;
+    padding-left: 24px;
+  }
+}
+
+.source-item:has(.source-check:checked) {
   border-color: #aac8ff;
   background: var(--primary-soft);
   box-shadow: inset 3px 0 0 var(--primary);
@@ -2508,7 +2636,7 @@ input[type="checkbox"]:checked::after {
   background: var(--surface-raised);
 }
 
-.source-item:has(input:checked) {
+.source-item:has(.source-check:checked) {
   border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
   background: var(--primary-soft);
   box-shadow: inset 3px 0 0 var(--primary);

@@ -458,15 +458,14 @@ func validSourceIDs(ids []string) []string {
 	if len(ids) == 0 {
 		return nil
 	}
-	known := sourceMap()
 	out := make([]string, 0, len(ids))
 	seen := map[string]bool{}
 	for _, id := range ids {
-		id = strings.TrimSpace(id)
+		id = normalizeSourceID(id)
 		if id == "all" {
 			return nil
 		}
-		if _, ok := known[id]; ok && !seen[id] {
+		if id != "" && !seen[id] {
 			seen[id] = true
 			out = append(out, id)
 		}

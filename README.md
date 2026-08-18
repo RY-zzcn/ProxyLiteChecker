@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scrip
 部署指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.6
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.7
 ```
 
 ## 升级
@@ -237,7 +237,7 @@ docker run -d --name proxylitechecker \
   -e SECRET_KEY='请改成强随机字符串' \
   -e PLC_REQUIRE_SECURE=1 \
   -v proxylite-data:/app/data \
-  ghcr.io/ry-zzcn/proxylitechecker:v0.4.6
+  ghcr.io/ry-zzcn/proxylitechecker:v0.4.7
 ```
 
 ## 手动下载二进制
@@ -290,4 +290,5 @@ go build -o bin/proxylite ./cmd/proxylite
 - [v0.4.4 前端 UI 优化路线图](docs/ROADMAP_V0.4.4.md)
 - [v0.4.5 实时控制台与任务可观测性路线图](docs/ROADMAP_V0.4.5.md)
 - [v0.4.6 真实流量熔断与 Cloudflare 严格判定路线图](docs/ROADMAP_V0.4.6.md)
+- [v0.4.7 代理源维护与 Docker TLS 修复路线图](docs/ROADMAP_V0.4.7.md)
 - [更新记录](CHANGELOG.md)
