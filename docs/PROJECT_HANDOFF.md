@@ -18,9 +18,9 @@
 - 最近完成：新增 schema `407001 / v0.4.7_proxy_sources`、动态源 CRUD/拉取/调度兼容、Web 源编辑器、启停和失败原因提示；Docker runtime 安装 `ca-certificates`；补充动态 JSON 源解析测试。
 - 已通过验证：preflight、全量 test/vet/race、版本一致性、Node 语法和差异检查；临时 SQLite 迁移到 `407001`；回环地址 health 返回 `0.4.7`；登录、33 个内置源、自定义源创建/更新/删除 `201/200/200` 和 GeoIP 状态 API 冒烟通过。
 - 上一已发布版本：<https://github.com/RY-zzcn/ProxyLiteChecker/releases/tag/v0.4.6>；8 个资产全部 uploaded；GHCR `v0.4.6` 摘要 `sha256:a592bccd0f5c4f7a53e2d56e34c148e0a41eda0a00f3e81231a0c4d97e476b0e`，包含 `linux/amd64` 与 `linux/arm64`。
-- 正在执行或准备执行的命令：审计提交范围，创建发布提交并推送 main；随后推送 annotated `v0.4.7` tag，监控 CI、Release 和 Docker 工作流并核验发布资产。
-- 当前阻塞：无；Deploy key 已验证可访问仓库。
-- 唯一下一步：创建并推送 v0.4.7 发布提交。
+- 正在执行或准备执行的命令：等待 CI `32168526273`、Release `32168607662`、main Docker `32168526272` 和 tag Docker `32168607889` 终态，随后核验 Release 资产与 GHCR manifest。
+- 当前阻塞：无；Deploy key 已验证，发布提交 `bbab7a3` 和 annotated `v0.4.7` tag 已推送。
+- 唯一下一步：取得四条 v0.4.7 工作流的最终终态。
 
 - 迁移补充：新增 schema `406001 / v0.4.6_cloudflare_target_strict`，事务内把历史 `proxy_target_state` 和 `proxy_checks` 中 `available + blocked/challenge` 重分类为 failed；新写入仍在保存层二次强制该不变量。
 - 真实库迁移前审计：schema `402001`，16,057 proxies，638 条 blocked/challenge 目标记录，其中 102 条仍为 available，`integrity_check=ok`。

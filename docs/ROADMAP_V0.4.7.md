@@ -10,10 +10,10 @@
 - [x] Docker 运行镜像安装 CA 根证书，修复代理源和 GeoIP HTTPS 下载。
 - [x] 补充迁移、源 CRUD、动态拉取和部署配置测试。
 - [x] 完成版本、CHANGELOG、部署文档和本机回环地址迁移/API 冒烟。
-- [ ] 推送发布提交和 annotated `v0.4.7` tag，完成 GitHub Release、二进制资产与 GHCR 多架构镜像核验。
+- [ ] 完成 GitHub Release、二进制资产与 GHCR 多架构镜像核验。
 
 当前工作包：`v0.4.7_release`。
-当前阻塞：无；Deploy key 已验证可访问仓库。
+当前阻塞：无；Deploy key 已验证，发布提交和 tag 已推送。
 已通过：preflight、全量 Go test/vet/race、Node 语法、版本一致性、差异检查、schema `407001` 迁移、健康检查、登录、33 个内置源读取、自定义源 CRUD 和 GeoIP 状态 API 冒烟。
-正在执行或准备执行：审计提交范围，创建发布提交并推送 main；随后推送 annotated `v0.4.7` tag，监控 CI、Release、Docker 工作流。
-唯一下一步：创建并推送 v0.4.7 发布提交。
+正在执行或准备执行：等待 CI `32168526273`、Release `32168607662`、main Docker `32168526272` 和 tag Docker `32168607889` 终态，随后核验 Release 资产与 GHCR manifest。
+唯一下一步：取得四条 v0.4.7 工作流的最终终态。
