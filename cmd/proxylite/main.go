@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	appVersion           = "0.4.10"
+	appVersion           = "0.4.11"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"
@@ -894,6 +894,8 @@ func countriesFromQuery(r *http.Request) []string {
 }
 
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	localPath := filepath.Join(s.cfg.WebDir, strings.TrimPrefix(r.URL.Path, "/"))
 	if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
 		http.ServeFile(w, r, localPath)
@@ -906,6 +908,8 @@ func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		errorResponse(w, http.StatusNotFound, "api endpoint not found")
 		return
@@ -937,6 +941,8 @@ func serveEmbeddedWebFile(w http.ResponseWriter, r *http.Request, name string) b
 	if err != nil {
 		return false
 	}
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	http.ServeContent(w, r, filepath.Base(name), time.Time{}, bytes.NewReader(raw))
 	return true
 }

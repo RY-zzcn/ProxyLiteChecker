@@ -548,6 +548,11 @@ function sourceHealthLabel(health) {
 }
 
 function openSourceEditor(source = null) {
+  const dialog = document.getElementById("sourceEditorDialog");
+  if (!dialog) {
+    toast("当前页面资源版本过旧，请刷新页面", "error");
+    return;
+  }
   const editing = Boolean(source);
   el("sourceEditorTitle").textContent = editing ? "编辑代理源" : "新增代理源";
   el("sourceEditorId").value = source?.id || "";
@@ -559,7 +564,7 @@ function openSourceEditor(source = null) {
   el("sourceEditorParser").value = source?.parser || "plain";
   el("sourceEditorEnabled").checked = source?.enabled !== false;
   el("sourceEditorError").textContent = "";
-  el("sourceEditorDialog").showModal();
+  dialog.showModal();
   el("sourceEditorName").focus();
 }
 
@@ -1533,15 +1538,15 @@ function bindEvents() {
   });
   el("refreshBtn").addEventListener("click", (event) => withButton(event.currentTarget, "刷新中", refreshAll));
   el("fetchSourcesBtn").addEventListener("click", fetchSources);
-  el("manageSourcesBtn").addEventListener("click", () => {
-    const panel = document.querySelector(".sources-panel");
-    panel?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => el("addSourceBtn").focus(), 250);
-  });
-  el("addSourceBtn").addEventListener("click", () => openSourceEditor());
-  el("sourceEditorForm").addEventListener("submit", saveSource);
-  el("closeSourceEditorBtn").addEventListener("click", closeSourceEditor);
-  el("cancelSourceEditorBtn").addEventListener("click", closeSourceEditor);
+  const bind = (id, event, handler) => {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener(event, handler);
+  };
+  bind("manageSourcesBtn", "click", () => openSourceEditor());
+  bind("addSourceBtn", "click", () => openSourceEditor());
+  bind("sourceEditorForm", "submit", saveSource);
+  bind("closeSourceEditorBtn", "click", closeSourceEditor);
+  bind("cancelSourceEditorBtn", "click", closeSourceEditor);
   el("selectAllSources").addEventListener("click", () => {
     document.querySelectorAll(".source-check").forEach((item) => {
       item.checked = true;

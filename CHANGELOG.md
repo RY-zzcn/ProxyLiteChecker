@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.11 - 2026-08-19
+
+- Fix source-management controls when browsers combine a new HTML page with an older cached JavaScript bundle.
+- Make both source-management entry buttons open the editor directly and keep per-source edit/delete actions visible with a stable responsive grid.
+- Disable caching for the embedded console and add versioned CSS/JavaScript URLs so deployments immediately load matching frontend assets after upgrades.
+
 ## 0.4.10 - 2026-08-19
 
 - Reduce Docker release time by removing duplicate branch builds, enabling BuildKit GitHub cache, trimming the build context, and disabling unused metadata generation.

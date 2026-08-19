@@ -716,7 +716,8 @@ textarea {
 }
 
 .source-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -743,7 +744,6 @@ textarea {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex: 1 1 210px;
 }
 
 .source-select span {
@@ -860,16 +860,6 @@ textarea {
     grid-column: auto;
   }
 
-  .source-item {
-    flex-wrap: wrap;
-  }
-
-  .source-item small {
-    order: 4;
-    flex: 1 1 100%;
-    max-width: none;
-    padding-left: 24px;
-  }
 }
 
 .source-item:has(.source-check:checked) {
@@ -903,6 +893,35 @@ textarea {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .source-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .source-item small {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    max-width: none;
+  }
+
+  .source-enabled {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .source-tool {
+    grid-row: 3;
+  }
+
+  .source-tool[data-source-edit] {
+    grid-column: 1;
+  }
+
+  .source-tool[data-source-delete] {
+    grid-column: 2;
+  }
 }
 
 .sources-panel,
