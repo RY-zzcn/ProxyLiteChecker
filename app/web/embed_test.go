@@ -12,8 +12,9 @@ func TestEmbeddedConsoleIncludesV047SourceCatalog(t *testing.T) {
 			`id="themeToggle"`,
 			`class="workspace-nav"`,
 			`<details class="settings-group`,
-			`id="versionText">v0.4.11`,
-			`/static/app.js?v=0.4.11`,
+			`id="versionText">v0.4.12`,
+			`/static/app.js?v=0.4.12`,
+			`id="sourceManagerDialog"`,
 			`id="runtimeLogs"`,
 			`name="automation-settings"`,
 		},
@@ -30,6 +31,7 @@ func TestEmbeddedConsoleIncludesV047SourceCatalog(t *testing.T) {
 			`data-label="代理"`,
 			"openSourceEditor",
 			"manageSourcesBtn",
+			"openSourceManager",
 		},
 	}
 	for name, needles := range checks {

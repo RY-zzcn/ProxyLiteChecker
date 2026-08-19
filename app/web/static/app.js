@@ -547,6 +547,59 @@ function sourceHealthLabel(health) {
   return `失败 ${Number(health.failure_streak || 0)}${disabled}`;
 }
 
+function renderSourceManager() {
+  const list = document.getElementById("sourceManagerList");
+  if (!list) return;
+  el("sourceManagerSummary").textContent = `${state.sources.length} 个代理源`;
+  list.innerHTML =
+    state.sources
+      .map((source) => {
+        const health = source.health || source;
+        const status = sourceHealthLabel(health);
+        const error = String(health.last_error || "").trim();
+        return `
+          <article class="source-manager-item${source.enabled ? "" : " disabled"}">
+            <div class="source-manager-copy">
+              <strong>${escapeHtml(source.name)}</strong>
+              <code title="${escapeHtml(source.url)}">${escapeHtml(source.url)}</code>
+              <small title="${escapeHtml(error || status)}">${escapeHtml(source.enabled ? status : "已停用")}</small>
+            </div>
+            <label class="source-manager-toggle"><input type="checkbox" data-manager-enabled="${escapeHtml(source.id)}" ${source.enabled ? "checked" : ""} /><span>启用</span></label>
+            <div class="source-manager-actions">
+              <button type="button" class="secondary" data-manager-edit="${escapeHtml(source.id)}">编辑</button>
+              <button type="button" class="danger secondary" data-manager-delete="${escapeHtml(source.id)}">删除</button>
+            </div>
+          </article>`;
+      })
+      .join("") || `<div class="empty-row">暂无代理源</div>`;
+  list.querySelectorAll("[data-manager-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      closeSourceManager();
+      openSourceEditor(state.sources.find((item) => item.id === button.dataset.managerEdit));
+    });
+  });
+  list.querySelectorAll("[data-manager-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteSource(button.dataset.managerDelete));
+  });
+  list.querySelectorAll("[data-manager-enabled]").forEach((input) => {
+    input.addEventListener("change", () => setSourceEnabled(input.dataset.managerEnabled, input.checked));
+  });
+}
+
+function openSourceManager() {
+  const dialog = document.getElementById("sourceManagerDialog");
+  if (!dialog) {
+    toast("当前页面资源版本过旧，请刷新页面", "error");
+    return;
+  }
+  renderSourceManager();
+  dialog.showModal();
+}
+
+function closeSourceManager() {
+  document.getElementById("sourceManagerDialog")?.close();
+}
+
 function openSourceEditor(source = null) {
   const dialog = document.getElementById("sourceEditorDialog");
   if (!dialog) {
@@ -1125,6 +1178,7 @@ async function loadSources() {
   const payload = await api("/api/sources");
   state.sources = payload.items || [];
   renderSources();
+  if (document.getElementById("sourceManagerDialog")?.open) renderSourceManager();
   if (existingControls.length) {
     document.querySelectorAll(".source-check").forEach((input) => {
       input.checked = selected.has(input.value);
@@ -1542,8 +1596,14 @@ function bindEvents() {
     const node = document.getElementById(id);
     if (node) node.addEventListener(event, handler);
   };
-  bind("manageSourcesBtn", "click", () => openSourceEditor());
+  bind("manageSourcesBtn", "click", openSourceManager);
   bind("addSourceBtn", "click", () => openSourceEditor());
+  bind("closeSourceManagerBtn", "click", closeSourceManager);
+  bind("sourceManagerDoneBtn", "click", closeSourceManager);
+  bind("sourceManagerAddBtn", "click", () => {
+    closeSourceManager();
+    openSourceEditor();
+  });
   bind("sourceEditorForm", "submit", saveSource);
   bind("closeSourceEditorBtn", "click", closeSourceEditor);
   bind("cancelSourceEditorBtn", "click", closeSourceEditor);

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.4.12 - 2026-08-19
+
+- Split source management from source creation: the management dialog now lists all sources with enable, edit, and delete controls, while the add button opens only a blank creation form.
+- Keep source-management rows responsive and refresh their state immediately after enable, update, or delete operations.
+
 ## 0.4.11 - 2026-08-19
 
 - Fix source-management controls when browsers combine a new HTML page with an older cached JavaScript bundle.

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	appVersion           = "0.4.11"
+	appVersion           = "0.4.12"
 	defaultSecretKey     = "change-this-secret"
 	defaultAdminPassword = "admin123"
 	authCookieName       = "plc_access"

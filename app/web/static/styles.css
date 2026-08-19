@@ -784,7 +784,8 @@ textarea {
   font-weight: 700;
 }
 
-.source-editor-dialog {
+.source-editor-dialog,
+.source-manager-dialog {
   width: min(680px, calc(100vw - 32px));
   max-width: 680px;
   padding: 0;
@@ -795,12 +796,87 @@ textarea {
   box-shadow: 0 24px 70px rgb(15 23 42 / 24%);
 }
 
-.source-editor-dialog::backdrop {
+.source-editor-dialog::backdrop,
+.source-manager-dialog::backdrop {
   background: rgb(15 23 42 / 42%);
 }
 
 .source-editor-dialog form {
   padding: 20px;
+}
+
+.source-manager-dialog {
+  width: min(860px, calc(100vw - 32px));
+  max-width: 860px;
+}
+
+.source-manager-shell {
+  padding: 20px;
+}
+
+.source-manager-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(58vh, 560px);
+  margin-top: 16px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.source-manager-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.source-manager-item.disabled {
+  opacity: 0.65;
+}
+
+.source-manager-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.source-manager-copy strong,
+.source-manager-copy code,
+.source-manager-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-manager-copy code {
+  color: var(--muted-strong);
+  font-size: 12px;
+}
+
+.source-manager-copy small {
+  color: var(--muted);
+}
+
+.source-manager-toggle,
+.source-manager-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.source-manager-toggle input {
+  width: 16px;
+  min-height: 16px;
+}
+
+.source-manager-actions button {
+  min-width: 64px;
 }
 
 .dialog-head,
@@ -858,6 +934,18 @@ textarea {
 
   .source-editor-grid .source-editor-wide {
     grid-column: auto;
+  }
+
+  .source-manager-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .source-manager-actions {
+    grid-column: 1 / -1;
+  }
+
+  .source-manager-actions button {
+    flex: 1 1 0;
   }
 
 }

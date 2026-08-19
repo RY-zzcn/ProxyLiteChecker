@@ -13,7 +13,7 @@
         document.documentElement.dataset.theme = theme;
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=0.4.11" />
+    <link rel="stylesheet" href="/static/styles.css?v=0.4.12" />
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主内容</a>
@@ -48,7 +48,7 @@
           <div>
             <span class="brand-eyebrow">LOCAL PROXY OPS</span>
             <strong>ProxyLiteChecker</strong>
-            <small><span id="versionText">v0.4.11</span> · 额丶Y</small>
+            <small><span id="versionText">v0.4.12</span> · 额丶Y</small>
           </div>
         </div>
         <div class="header-status">
@@ -580,6 +580,23 @@
     </main>
 
     <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <dialog id="sourceManagerDialog" class="source-manager-dialog">
+      <div class="source-manager-shell">
+        <div class="dialog-head">
+          <div>
+            <span class="section-eyebrow">SOURCE MANAGEMENT</span>
+            <h2>代理源管理</h2>
+            <p id="sourceManagerSummary">0 个代理源</p>
+          </div>
+          <button id="closeSourceManagerBtn" class="ghost" type="button" aria-label="关闭">关闭</button>
+        </div>
+        <div id="sourceManagerList" class="source-manager-list"></div>
+        <div class="dialog-actions">
+          <button id="sourceManagerAddBtn" type="button">新增代理源</button>
+          <button id="sourceManagerDoneBtn" class="secondary" type="button">完成</button>
+        </div>
+      </div>
+    </dialog>
     <dialog id="sourceEditorDialog" class="source-editor-dialog">
       <form id="sourceEditorForm" method="dialog">
         <div class="dialog-head">
@@ -605,6 +622,6 @@
         </div>
       </form>
     </dialog>
-    <script src="/static/app.js?v=0.4.11"></script>
+    <script src="/static/app.js?v=0.4.12"></script>
   </body>
 </html>
