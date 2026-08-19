@@ -1,9 +1,9 @@
 # ProxyLiteChecker 项目接手与进度总览
 
-- 状态：`v0.4.9` 已完成并发布
-- 当前代码版本：`v0.4.9`
-- 当前已发布版本：`v0.4.8`
-- 当前唯一开发阶段：`v0.4.9 / COMPLETE`
+- 状态：`v0.4.10` 发布准备中
+- 当前代码版本：`v0.4.10`
+- 当前已发布版本：`v0.4.9`
+- 当前唯一开发阶段：`v0.4.10 / IN PROGRESS`
 - 下一开发版本：待用户规划
 - 路线图终点：`v0.4.8`
 - 最后校准日期：2026-08-19
@@ -39,6 +39,12 @@
 - 已通过：v0.4.9 CI、Release 和 main/tag Docker 多架构构建全部成功；Release 资产与 GHCR `latest`/`v0.4.9` 镜像已由工作流发布。
 - 当前阻塞：无。
 - 唯一下一步：在实际部署机执行 `docker compose pull && docker compose up -d`，确认页面版本为 v0.4.9 并使用“代理源管理”入口。
+
+## Docker 构建性能优化
+
+- 已完成：Docker 工作流只在 `v*` 标签触发，避免同一发布的 `main` 和 tag 重复构建；启用 GitHub Actions BuildKit 缓存；缩小 Docker context；关闭未使用的 provenance/SBOM 生成；Dockerfile 按依赖、源码和 Web 资源分层复制。
+- 预期：普通 `main` 推送不再触发镜像构建；正式发布仍同时生成版本标签和 `latest`，后续缓存命中时构建时间显著下降。
+- 唯一下一步：将该工作流优化作为下一版本发布并比较 Docker 运行时长。
 
 - 迁移补充：新增 schema `406001 / v0.4.6_cloudflare_target_strict`，事务内把历史 `proxy_target_state` 和 `proxy_checks` 中 `available + blocked/challenge` 重分类为 failed；新写入仍在保存层二次强制该不变量。
 - 真实库迁移前审计：schema `402001`，16,057 proxies，638 条 blocked/challenge 目标记录，其中 102 条仍为 available，`integrity_check=ok`。

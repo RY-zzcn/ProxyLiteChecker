@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.10 - 2026-08-19
+
+- Reduce Docker release time by removing duplicate branch builds, enabling BuildKit GitHub cache, trimming the build context, and disabling unused metadata generation.
+
+- Optimize Docker publishing by building only on version tags, enabling GitHub Actions BuildKit cache, excluding runtime/development files from the build context, and disabling unused provenance/SBOM generation.
+
 ## 0.4.9 - 2026-08-19
 
 - Make Docker installer deployments track `latest` by default; passing `--version` still pins the requested release tag.

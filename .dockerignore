@@ -1,0 +1,12 @@
+.git
+.github
+backups
+bin
+data
+dist
+*.db
+*.db-shm
+*.db-wal
+*.log
+docs
+tmp

@@ -2,7 +2,9 @@ FROM golang:1.22-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
+COPY app/web ./app/web
 RUN CGO_ENABLED=0 go build -o /out/proxylite ./cmd/proxylite
 
 FROM debian:bookworm-slim
