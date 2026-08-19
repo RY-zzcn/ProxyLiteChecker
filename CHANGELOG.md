@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.4.9 - 2026-08-19
+
+- Make Docker installer deployments track `latest` by default; passing `--version` still pins the requested release tag.
+- Remove stale `APP_VERSION` overrides from rolling Docker deployments so health and Web UI report the version compiled into the current image.
+
 ## 0.4.8 - 2026-08-19
 
 - Publish the source-management UI entry explicitly so deployed consoles expose source CRUD controls without relying on a cached layout.

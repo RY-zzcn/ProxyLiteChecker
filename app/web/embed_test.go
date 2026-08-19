@@ -12,7 +12,7 @@ func TestEmbeddedConsoleIncludesV047SourceCatalog(t *testing.T) {
 			`id="themeToggle"`,
 			`class="workspace-nav"`,
 			`<details class="settings-group`,
-			`id="versionText">v0.4.8`,
+			`id="versionText">v0.4.9`,
 			`id="runtimeLogs"`,
 			`name="automation-settings"`,
 		},

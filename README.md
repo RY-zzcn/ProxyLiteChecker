@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scrip
 部署指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.8
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.9
 ```
 
 ## 升级

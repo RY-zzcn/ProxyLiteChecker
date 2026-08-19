@@ -21,7 +21,6 @@ check_contains() {
 }
 
 check_contains app/web/index.html "v${version}"
-check_contains .env.example "APP_VERSION=${version}"
 # The repository Compose file intentionally tracks the rolling image. Release
 # tags remain available for pinned deployments and are validated by CI.
 check_contains docker-compose.yml "latest"

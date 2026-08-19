@@ -1,9 +1,9 @@
 # ProxyLiteChecker 项目接手与进度总览
 
-- 状态：`v0.4.8` 发布准备中
-- 当前代码版本：`v0.4.8`
-- 当前已发布版本：`v0.4.7`
-- 当前唯一开发阶段：`v0.4.8 / IN PROGRESS`
+- 状态：`v0.4.9` 发布准备中
+- 当前代码版本：`v0.4.9`
+- 当前已发布版本：`v0.4.8`
+- 当前唯一开发阶段：`v0.4.9 / IN PROGRESS`
 - 下一开发版本：待用户规划
 - 路线图终点：`v0.4.8`
 - 最后校准日期：2026-08-19
@@ -31,13 +31,13 @@
 - 当前阻塞：尚未在现有 `127.0.0.1:8899` 实例上完成升级后的 API/Web 冒烟；当前环境该端口未监听。
 - 唯一下一步：构建新二进制并在现有 8899 部署恢复后验证登录、源 CRUD、严格目标探测结果和网关资格。
 
-## v0.4.8 发布工作包
+## v0.4.9 发布工作包
 
 - 状态：`IN PROGRESS`
-- 已完成：显式“代理源管理”入口、Compose 默认 `latest`、版本号和发布说明更新。
-- 发布要求：提交、推送、annotated tag `v0.4.8`，由 GitHub Actions 构建 Release 二进制和 GHCR 多架构 `latest`/`v0.4.8` 镜像。
+- 已完成：显式“代理源管理”入口、Compose 默认 `latest`、安装脚本滚动 Docker 默认 `latest`、版本号和发布说明更新。
+- 发布要求：提交、推送、annotated tag `v0.4.9`，由 GitHub Actions 构建 Release 二进制和 GHCR 多架构 `latest`/`v0.4.9` 镜像。
 - 当前阻塞：等待远端推送和工作流结果。
-- 唯一下一步：执行测试后创建并推送 `v0.4.8` 标签，核验 Release 与 GHCR 镜像。
+- 唯一下一步：执行测试后创建并推送 `v0.4.9` 标签，核验 Release 与 GHCR 镜像。
 
 - 迁移补充：新增 schema `406001 / v0.4.6_cloudflare_target_strict`，事务内把历史 `proxy_target_state` 和 `proxy_checks` 中 `available + blocked/challenge` 重分类为 failed；新写入仍在保存层二次强制该不变量。
 - 真实库迁移前审计：schema `402001`，16,057 proxies，638 条 blocked/challenge 目标记录，其中 102 条仍为 available，`integrity_check=ok`。

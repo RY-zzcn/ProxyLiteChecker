@@ -9,6 +9,8 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 IMAGE="ghcr.io/ry-zzcn/proxylitechecker"
 MODE=""
 RELEASE_TAG=""
+VERSION_EXPLICIT=0
+DOCKER_IMAGE_TAG="latest"
 AUTO_YES=0
 TMP_DIR=""
 GENERATED_PASSWORD=""
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --version)
       [[ $# -ge 2 ]] || die "--version 缺少参数"
       RELEASE_TAG="$2"
+      VERSION_EXPLICIT=1
       shift 2
       ;;
     --yes)
@@ -157,9 +160,8 @@ PLC_SOCKS5_GATEWAY_PORT=18081
 EOF
     chmod 600 "$INSTALL_DIR/.env"
   fi
-  if grep -q '^APP_VERSION=' "$INSTALL_DIR/.env"; then
-    sed -i "s/^APP_VERSION=.*/APP_VERSION=${RELEASE_TAG#v}/" "$INSTALL_DIR/.env"
-  else
+  sed -i '/^APP_VERSION=/d' "$INSTALL_DIR/.env"
+  if [[ "$MODE" == "binary" || "$VERSION_EXPLICIT" -eq 1 ]]; then
     printf '\nAPP_VERSION=%s\n' "${RELEASE_TAG#v}" >>"$INSTALL_DIR/.env"
   fi
   chmod 600 "$INSTALL_DIR/.env"
@@ -274,13 +276,16 @@ ensure_docker() {
 
 install_docker() {
   ensure_docker
-  say "正在拉取 ${IMAGE}:${RELEASE_TAG}..."
-  docker pull "${IMAGE}:${RELEASE_TAG}" || die "GHCR 镜像拉取失败，项目部署已停止"
+  if [[ "$VERSION_EXPLICIT" -eq 1 ]]; then
+    DOCKER_IMAGE_TAG="$RELEASE_TAG"
+  fi
+  say "正在拉取 ${IMAGE}:${DOCKER_IMAGE_TAG}..."
+  docker pull "${IMAGE}:${DOCKER_IMAGE_TAG}" || die "GHCR 镜像拉取失败，项目部署已停止"
   prepare_install_dir
   cat >"$INSTALL_DIR/compose.yaml" <<EOF
 services:
   proxylitechecker:
-    image: ${IMAGE}:${RELEASE_TAG}
+    image: ${IMAGE}:${DOCKER_IMAGE_TAG}
     container_name: proxylitechecker
     restart: unless-stopped
     env_file:
