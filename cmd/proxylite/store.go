@@ -437,6 +437,9 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	if err := s.applySourceCatalogMigrationIfNeeded(); err != nil {
 		return err
 	}
+	if err := s.ensureSourceCatalog(); err != nil {
+		return err
+	}
 	if err := s.ensurePerformanceIndexes(); err != nil {
 		return err
 	}
@@ -445,6 +448,34 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		return err
 	}
 	log.Printf("database schema version: %d", version)
+	return nil
+}
+
+// ensureSourceCatalog repairs databases created by interrupted or older
+// deployments where the migration marker exists but the catalog table does not.
+func (s *store) ensureSourceCatalog() error {
+	if _, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS proxy_sources (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  default_protocol TEXT NOT NULL DEFAULT 'auto',
+  parser TEXT NOT NULL DEFAULT 'plain',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  builtin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
+);
+CREATE INDEX IF NOT EXISTS idx_proxy_sources_enabled ON proxy_sources(enabled);`); err != nil {
+		return err
+	}
+	for _, source := range builtinSources() {
+		if _, err := s.db.Exec(`
+INSERT OR IGNORE INTO proxy_sources (id, name, url, default_protocol, parser, enabled, builtin)
+VALUES (?, ?, ?, ?, ?, 1, 1)`, source.ID, source.Name, source.URL, source.DefaultProtocol, source.Parser); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

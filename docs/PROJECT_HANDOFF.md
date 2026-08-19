@@ -23,6 +23,14 @@
 - 当前阻塞：无。
 - 唯一下一步：等待用户制定 v0.4.7 之后的新路线。
 
+## 当前热修工作包（用户反馈后）
+
+- 状态：`IN PROGRESS`
+- 已完成：源目录启动自愈（迁移标记存在但表缺失时重建并补种内置源）；源更新 API 增加 `PUT` 兼容；前端编辑改用 `PUT`；命名目标启用严格证据校验，拒绝空响应、拦截页和非 JSON API 响应；补充源目录与目标探测边界测试。
+- 已通过：`go test ./...`、`go vet ./...`、Node `--check app/web/static/app.js`、`git diff --check`。
+- 当前阻塞：尚未在现有 `127.0.0.1:8899` 实例上完成升级后的 API/Web 冒烟；当前环境该端口未监听。
+- 唯一下一步：构建新二进制并在现有 8899 部署恢复后验证登录、源 CRUD、严格目标探测结果和网关资格。
+
 - 迁移补充：新增 schema `406001 / v0.4.6_cloudflare_target_strict`，事务内把历史 `proxy_target_state` 和 `proxy_checks` 中 `available + blocked/challenge` 重分类为 failed；新写入仍在保存层二次强制该不变量。
 - 真实库迁移前审计：schema `402001`，16,057 proxies，638 条 blocked/challenge 目标记录，其中 102 条仍为 available，`integrity_check=ok`。
 - 已通过验证：迁移单元测试、重复启动幂等、保存层排除和调度迁移版本回归。

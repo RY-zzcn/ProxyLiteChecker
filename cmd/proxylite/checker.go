@@ -69,6 +69,7 @@ type TargetProfile struct {
 	Keyword          string            `json:"keyword,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
 	TimeoutSeconds   int               `json:"timeout_seconds,omitempty"`
+	StrictEvidence   bool              `json:"strict_evidence,omitempty"`
 }
 
 type singleCheckResult struct {
@@ -118,10 +119,10 @@ var targetProfileOrder = []string{"generic", "openai", "grok", "gemini", "claude
 
 var targetProfiles = map[string]TargetProfile{
 	"generic": {ServiceURL: "https://example.com/"},
-	"openai":  {ServiceURL: "https://chat.openai.com/", APIURL: "https://api.openai.com/v1/models"},
-	"grok":    {ServiceURL: "https://grok.com/", APIURL: "https://api.x.ai/v1/models"},
-	"gemini":  {ServiceURL: "https://gemini.google.com/", APIURL: "https://generativelanguage.googleapis.com/v1beta/models"},
-	"claude":  {ServiceURL: "https://claude.ai/", APIURL: "https://api.anthropic.com/v1/models"},
+	"openai":  {ServiceURL: "https://chat.openai.com/", APIURL: "https://api.openai.com/v1/models", StrictEvidence: true},
+	"grok":    {ServiceURL: "https://grok.com/", APIURL: "https://api.x.ai/v1/models", StrictEvidence: true},
+	"gemini":  {ServiceURL: "https://gemini.google.com/", APIURL: "https://generativelanguage.googleapis.com/v1beta/models", StrictEvidence: true},
+	"claude":  {ServiceURL: "https://claude.ai/", APIURL: "https://api.anthropic.com/v1/models", StrictEvidence: true},
 }
 
 var checkProxyHTTPClient = proxyHTTPClient
@@ -1247,7 +1248,11 @@ func serviceOKStatus(ctx context.Context, client *http.Client, profile TargetPro
 	_, _ = io.Copy(io.Discard, resp.Body)
 	body := string(raw)
 	cloudflare := checkmeta.DetectCloudflareStatus(resp.StatusCode, resp.Header, body)
-	return allowed[resp.StatusCode] && keywordMatched(profile, body) && !checkmeta.CloudflareBlocksAccess(cloudflare), cloudflare
+	ok := allowed[resp.StatusCode] && keywordMatched(profile, body) && !checkmeta.CloudflareBlocksAccess(cloudflare)
+	if ok && profile.StrictEvidence {
+		ok = targetServiceEvidence(resp.StatusCode, body)
+	}
+	return ok, cloudflare
 }
 
 func apiOKStatus(ctx context.Context, client *http.Client, profile TargetProfile, target string, allowed map[int]bool) (bool, string) {
@@ -1265,7 +1270,50 @@ func apiOKStatus(ctx context.Context, client *http.Client, profile TargetProfile
 	_, _ = io.Copy(io.Discard, resp.Body)
 	body := string(raw)
 	cloudflare := checkmeta.DetectCloudflareStatus(resp.StatusCode, resp.Header, body)
-	return allowed[resp.StatusCode] && keywordMatched(profile, body) && !checkmeta.CloudflareBlocksAccess(cloudflare), cloudflare
+	ok := allowed[resp.StatusCode] && keywordMatched(profile, body) && !checkmeta.CloudflareBlocksAccess(cloudflare)
+	if ok && profile.StrictEvidence {
+		ok = targetAPIEvidence(resp.StatusCode, resp.Header, body)
+	}
+	return ok, cloudflare
+}
+
+func targetServiceEvidence(status int, body string) bool {
+	if status == http.StatusNoContent {
+		return true
+	}
+	text := strings.ToLower(strings.TrimSpace(body))
+	if text == "" {
+		return false
+	}
+	for _, marker := range []string{"access denied", "request blocked", "captcha", "checking your browser", "temporarily unavailable", "proxy error"} {
+		if strings.Contains(text, marker) {
+			return false
+		}
+	}
+	return true
+}
+
+func targetAPIEvidence(status int, headers http.Header, body string) bool {
+	text := strings.TrimSpace(body)
+	if text == "" {
+		return false
+	}
+	contentType := strings.ToLower(headers.Get("Content-Type"))
+	jsonLike := strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") || strings.Contains(contentType, "json")
+	if !jsonLike {
+		return false
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		lower := strings.ToLower(text)
+		return strings.Contains(lower, "error") || strings.Contains(lower, "unauthor") || strings.Contains(lower, "api key") || strings.Contains(lower, "authentication")
+	}
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"access denied", "request blocked", "captcha", "checking your browser", "temporarily unavailable", "proxy error"} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return strings.Contains(lower, `"data"`) || strings.Contains(lower, `"models"`) || strings.Contains(lower, `"object"`) || strings.Contains(lower, `"model"`)
 }
 
 func targetContext(ctx context.Context, profile TargetProfile) (context.Context, context.CancelFunc) {

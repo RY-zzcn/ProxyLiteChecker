@@ -91,6 +91,55 @@ func TestTargetProbeRejectsCloudflareChallengeAndBlockedAPI(t *testing.T) {
 	}
 }
 
+func TestStrictTargetEvidenceRejectsSyntheticResponses(t *testing.T) {
+	profile := TargetProfile{ServiceURL: "https://target.test/web", APIURL: "https://target.test/api", StrictEvidence: true}
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		response := testHTTPResponse(http.StatusOK, "")
+		if req.URL.Path == "/web" {
+			response.Body = io.NopCloser(strings.NewReader("checking your browser"))
+			return response, nil
+		}
+		response.Body = io.NopCloser(strings.NewReader("upstream unavailable"))
+		return response, nil
+	})}
+	result := probeTargetWithClient(context.Background(), client, profile)
+	if result.ServiceReachable || result.APIReachable == nil || *result.APIReachable {
+		t.Fatalf("synthetic HTML/text responses must not count as strict target evidence: %#v", result)
+	}
+}
+
+func TestStrictTargetEvidenceAcceptsJSONAuthenticationError(t *testing.T) {
+	profile := TargetProfile{ServiceURL: "https://target.test/web", APIURL: "https://target.test/api", StrictEvidence: true}
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/web" {
+			return testHTTPResponse(http.StatusOK, "real service page"), nil
+		}
+		response := testHTTPResponse(http.StatusUnauthorized, `{"error":{"message":"invalid api key"}}`)
+		response.Header.Set("Content-Type", "application/json")
+		return response, nil
+	})}
+	result := probeTargetWithClient(context.Background(), client, profile)
+	if !result.ServiceReachable || result.APIReachable == nil || !*result.APIReachable {
+		t.Fatalf("JSON authentication response should count as API reachability evidence: %#v", result)
+	}
+}
+
+func TestStrictTargetEvidenceRejectsUnstructuredJSON(t *testing.T) {
+	profile := TargetProfile{ServiceURL: "https://target.test/web", APIURL: "https://target.test/api", StrictEvidence: true}
+	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/web" {
+			return testHTTPResponse(http.StatusOK, "real service page"), nil
+		}
+		response := testHTTPResponse(http.StatusOK, `{"message":"blocked"}`)
+		response.Header.Set("Content-Type", "application/json")
+		return response, nil
+	})}
+	result := probeTargetWithClient(context.Background(), client, profile)
+	if result.APIReachable == nil || *result.APIReachable {
+		t.Fatalf("unstructured JSON must not count as strict API evidence: %#v", result)
+	}
+}
+
 func TestFailedProxyDeletionRequiresCompleteBaseFailure(t *testing.T) {
 	if !shouldDeleteFailedProxy(&proxyCheckOutcome{Expected: 2, Seen: 2, AllFailed: true, Persisted: true}) {
 		t.Fatalf("expected complete persisted base failure to be deletable")

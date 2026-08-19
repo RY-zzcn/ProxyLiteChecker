@@ -277,6 +277,7 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /api/sources", s.withAuth(s.handleSources))
 	s.mux.HandleFunc("POST /api/sources", s.withAuth(s.handleCreateSource))
 	s.mux.HandleFunc("PATCH /api/sources/{source_id}", s.withAuth(s.handleUpdateSource))
+	s.mux.HandleFunc("PUT /api/sources/{source_id}", s.withAuth(s.handleUpdateSource))
 	s.mux.HandleFunc("DELETE /api/sources/{source_id}", s.withAuth(s.handleDeleteSource))
 	s.mux.HandleFunc("GET /api/target-profiles", s.withAuth(s.handleTargetProfiles))
 	s.mux.HandleFunc("POST /api/sources/fetch-job", s.withAuth(s.handleFetchSourcesJob))

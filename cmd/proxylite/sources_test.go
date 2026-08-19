@@ -139,3 +139,48 @@ func TestSourceCatalogAPIAndHealthError(t *testing.T) {
 		t.Fatalf("delete source status=%d body=%s", deleteResponse.Code, deleteResponse.Body.String())
 	}
 }
+
+func TestSourceCatalogAPIAcceptsPUTUpdates(t *testing.T) {
+	st, err := openStore(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := st.EnsureSchema("admin", "password"); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	srv := &server{store: st}
+	createResponse := httptest.NewRecorder()
+	srv.handleCreateSource(createResponse, httptest.NewRequest(http.MethodPost, "/api/sources", bytes.NewBufferString(`{"id":"put_source","name":"Put Source","url":"https://example.com/list.txt"}`)))
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("create source status=%d body=%s", createResponse.Code, createResponse.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/sources/put_source", bytes.NewBufferString(`{"name":"Updated","url":"https://example.com/updated.txt","enabled":false}`))
+	request.SetPathValue("source_id", "put_source")
+	response := httptest.NewRecorder()
+	srv.handleUpdateSource(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("put source status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, ok := srv.sourceByID("put_source")
+	if !ok || updated.Name != "Updated" || updated.Enabled {
+		t.Fatalf("PUT update was not persisted: %#v", updated)
+	}
+}
+
+func TestSourceCatalogRepairSeedsMissingTable(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	st := &store{db: db}
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL, app_version TEXT NOT NULL); INSERT INTO schema_migrations VALUES (407001, 'v0.4.7_proxy_sources', 'now', '0.4.7');`); err != nil {
+		t.Fatalf("seed migration marker: %v", err)
+	}
+	if err := st.ensureSourceCatalog(); err != nil {
+		t.Fatalf("repair source catalog: %v", err)
+	}
+	items, err := st.ListSources()
+	if err != nil || len(items) != len(builtinSources()) {
+		t.Fatalf("expected repaired built-in catalog, got %d items err=%v", len(items), err)
+	}
+}

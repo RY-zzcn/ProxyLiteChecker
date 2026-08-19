@@ -583,7 +583,7 @@ async function saveSource(event) {
   try {
     await withButton(el("saveSourceBtn"), "保存中", async () => {
       await api(existingId ? `/api/sources/${encodeURIComponent(existingId)}` : "/api/sources", {
-        method: existingId ? "PATCH" : "POST",
+        method: existingId ? "PUT" : "POST",
         body: JSON.stringify(payload),
       });
     });
