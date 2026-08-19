@@ -1533,6 +1533,11 @@ function bindEvents() {
   });
   el("refreshBtn").addEventListener("click", (event) => withButton(event.currentTarget, "刷新中", refreshAll));
   el("fetchSourcesBtn").addEventListener("click", fetchSources);
+  el("manageSourcesBtn").addEventListener("click", () => {
+    const panel = document.querySelector(".sources-panel");
+    panel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => el("addSourceBtn").focus(), 250);
+  });
   el("addSourceBtn").addEventListener("click", () => openSourceEditor());
   el("sourceEditorForm").addEventListener("submit", saveSource);
   el("closeSourceEditorBtn").addEventListener("click", closeSourceEditor);

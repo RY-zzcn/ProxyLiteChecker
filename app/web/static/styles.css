@@ -778,6 +778,12 @@ textarea {
   font-size: 11px;
 }
 
+.source-management-button {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
+  color: var(--primary-strong, var(--primary));
+  font-weight: 700;
+}
+
 .source-editor-dialog {
   width: min(680px, calc(100vw - 32px));
   max-width: 680px;

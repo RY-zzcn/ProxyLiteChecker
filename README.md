@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scrip
 部署指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.7
+curl -fsSL https://raw.githubusercontent.com/RY-zzcn/ProxyLiteChecker/main/scripts/install.sh | sudo bash -s -- --mode binary --version v0.4.8
 ```
 
 ## 升级
@@ -237,7 +237,7 @@ docker run -d --name proxylitechecker \
   -e SECRET_KEY='请改成强随机字符串' \
   -e PLC_REQUIRE_SECURE=1 \
   -v proxylite-data:/app/data \
-  ghcr.io/ry-zzcn/proxylitechecker:v0.4.7
+  ghcr.io/ry-zzcn/proxylitechecker:latest
 ```
 
 ## 手动下载二进制

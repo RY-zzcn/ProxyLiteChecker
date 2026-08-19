@@ -12,7 +12,7 @@ func TestEmbeddedConsoleIncludesV047SourceCatalog(t *testing.T) {
 			`id="themeToggle"`,
 			`class="workspace-nav"`,
 			`<details class="settings-group`,
-			`id="versionText">v0.4.7`,
+			`id="versionText">v0.4.8`,
 			`id="runtimeLogs"`,
 			`name="automation-settings"`,
 		},
@@ -28,6 +28,7 @@ func TestEmbeddedConsoleIncludesV047SourceCatalog(t *testing.T) {
 			"loadRuntime()",
 			`data-label="代理"`,
 			"openSourceEditor",
+			"manageSourcesBtn",
 		},
 	}
 	for name, needles := range checks {

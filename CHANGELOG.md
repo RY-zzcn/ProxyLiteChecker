@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.4.8 - 2026-08-19
+
+- Publish the source-management UI entry explicitly so deployed consoles expose source CRUD controls without relying on a cached layout.
+- Make the repository Docker Compose example use the rolling `latest` image by default while release tags remain available for pinned deployments.
+- Publish the source CRUD repair and stricter named-target evidence checks as a new binary and multi-architecture image release.
+
 - Harden proxy-source catalog startup repair and add `PUT /api/sources/{id}` compatibility for deployments where source edits were not reaching the handler.
 - Tighten named-target probes for OpenAI, Grok, Gemini, and Claude: reject empty/block HTML and non-JSON API responses while accepting genuine JSON authentication responses.
 
